@@ -15,6 +15,8 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ) {
 
+  let provider: typeof dnsProviders.$inferSelect | undefined;
+
   try {
     const { id } = await params;
     const domainId = parseInt(id);
@@ -27,11 +29,13 @@ export async function POST(
     }
 
     // 获取服务商信息
-    const [provider] = await db.select().from(dnsProviders).where(eq(dnsProviders.id, domain.providerId));
+    const [foundProvider] = await db.select().from(dnsProviders).where(eq(dnsProviders.id, domain.providerId));
 
-    if (!provider) {
+    if (!foundProvider) {
       return NextResponse.json({ success: false, error: 'Provider not found' }, { status: 404 });
     }
+
+    provider = foundProvider;
 
     // 解密凭证
     const credentials = decryptJSON(provider.credentials);
