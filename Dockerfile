@@ -3,16 +3,19 @@
 
 FROM node:24-slim AS base
 
+# 设置 CI 环境变量，防止 pnpm 交互式提示阻塞构建
+ENV CI=true
+
 # 设置工作目录
 WORKDIR /app
 
-# 复制依赖文件和 .npmrc
-COPY package.json pnpm-lock.yaml* .npmrc* ./
+# 复制依赖文件和配置文件
+COPY package.json pnpm-lock.yaml* pnpm-workspace.yaml* .npmrc* ./
 
 # 安装 pnpm
 RUN npm install -g pnpm
 
-# 安装项目依赖（.npmrc 已配置允许构建脚本）
+# 安装项目依赖（pnpm-workspace.yaml 已配置 allowBuilds）
 RUN pnpm install
 
 # 复制项目代码
