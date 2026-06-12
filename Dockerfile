@@ -42,6 +42,9 @@ COPY --from=base /app/node_modules ./node_modules
 COPY --from=base /app/.next ./.next
 COPY --from=base /app/src ./src
 COPY --from=base /app/package.json ./package.json
+COPY --from=base /app/pnpm-lock.yaml ./pnpm-lock.yaml
+COPY --from=base /app/pnpm-workspace.yaml ./pnpm-workspace.yaml
+COPY --from=base /app/.npmrc ./.npmrc
 COPY --from=base /app/tsconfig.json ./tsconfig.json
 COPY --from=base /app/next.config.* ./
 
@@ -56,6 +59,7 @@ USER appuser
 EXPOSE 5000
 
 # 设置环境变量
+ENV CI=true
 ENV NODE_ENV=production
 ENV PORT=5000
 
