@@ -21,6 +21,9 @@ RUN pnpm install
 # 复制项目代码
 COPY . .
 
+# 创建 data 目录（构建时需要数据库文件）
+RUN mkdir -p /app/data
+
 # 构建生产版本
 RUN pnpm build
 

@@ -1,17 +1,29 @@
 import { drizzle } from 'drizzle-orm/libsql';
 import { createClient } from '@libsql/client';
 import path from 'path';
+import fs from 'fs';
 
 // Using a file-based SQLite database in a data directory for Docker volume mounting
 const dataDir = path.resolve(process.cwd(), 'data');
 const sqlitePath = path.resolve(dataDir, 'local.sqlite');
 
-const client = createClient({
-    url: `file:${sqlitePath}`,
-});
+// Lazy initialization — only connect when db is first accessed
+let _client: ReturnType<typeof createClient> | null = null;
+let _db: ReturnType<typeof drizzle> | null = null;
 
-// Auto-provision tables if they don't exist
-client.executeMultiple(`
+function getClient() {
+  if (!_client) {
+    // Ensure data directory exists
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true });
+    }
+
+    _client = createClient({
+      url: `file:${sqlitePath}`,
+    });
+
+    // Auto-provision tables if they don't exist
+    _client.executeMultiple(`
 CREATE TABLE IF NOT EXISTS \`ai_configurations\` (
 	\`id\` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
 	\`name\` text NOT NULL,
@@ -68,6 +80,22 @@ CREATE TABLE IF NOT EXISTS \`operation_logs\` (
 	\`created_at\` text DEFAULT (CURRENT_TIMESTAMP) NOT NULL
 );
 `).catch((err) => console.error("Failed to auto-provision db tables:", err));
+  }
+  return _client;
+}
 
-export const db = drizzle(client);
+function getDb() {
+  if (!_db) {
+    _db = drizzle(getClient());
+  }
+  return _db;
+}
+
+// Export a proxy that lazily initializes the db
+export const db = new Proxy({} as ReturnType<typeof drizzle>, {
+  get(_target, prop) {
+    return (getDb() as any)[prop];
+  },
+});
+
 export default db;
