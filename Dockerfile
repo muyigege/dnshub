@@ -3,9 +3,6 @@
 
 FROM node:24-slim AS base
 
-# 配置国内源
-RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list
-
 # 安装依赖
 RUN apt-get update && apt-get install -y \
     openssl \
@@ -34,10 +31,8 @@ FROM node:24-slim AS production
 
 WORKDIR /app
 
-# 安装运行时依赖
-RUN apt-get update && apt-get install -y \
-    openssl \
-    && rm -rf /var/lib/apt/lists/*
+# 安装运行时依赖（openssl）
+RUN which openssl || (apt-get update && apt-get install -y openssl && rm -rf /var/lib/apt/lists/*)
 
 # 安装 pnpm
 RUN npm install -g pnpm
