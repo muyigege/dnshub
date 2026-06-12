@@ -37,18 +37,14 @@ RUN which openssl || (apt-get update && apt-get install -y openssl && rm -rf /va
 # 安装 pnpm
 RUN npm install -g pnpm
 
-# 只安装生产依赖
-COPY package.json pnpm-lock.yaml* ./
-RUN pnpm install --prod --unsafe-perm --shamefully-hoist --config.ignore-scripts=false
+# 从构建阶段复制完整的 node_modules
+COPY --from=base /app/node_modules ./node_modules
 
 # 从构建阶段复制构建产物
 COPY --from=base /app/.next ./.next
-# COPY --from=base /app/public ./public
 COPY --from=base /app/src ./src
 COPY --from=base /app/package.json ./package.json
 COPY --from=base /app/tsconfig.json ./tsconfig.json
-COPY --from=base /app/tailwind.config.* ./
-COPY --from=base /app/postcss.config.* ./
 COPY --from=base /app/next.config.* ./
 
 # 创建非 root 用户及持久化数据目录
