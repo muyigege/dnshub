@@ -32,6 +32,9 @@ FROM node:24-slim AS production
 
 WORKDIR /app
 
+# 安装 pnpm（生产环境启动需要）
+RUN npm install -g pnpm
+
 # 从构建阶段复制完整的 node_modules（包含已编译的原生模块）
 COPY --from=base /app/node_modules ./node_modules
 
