@@ -3,6 +3,9 @@
 
 FROM node:24-slim AS base
 
+# 配置国内源
+RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list
+
 # 安装依赖
 RUN apt-get update && apt-get install -y \
     openssl \
@@ -41,7 +44,7 @@ RUN npm install -g pnpm
 
 # 只安装生产依赖
 COPY package.json pnpm-lock.yaml* ./
-RUN pnpm install --prod
+RUN pnpm install --prod --unsafe-perm --shamefully-hoist --config.ignore-scripts=false
 
 # 从构建阶段复制构建产物
 COPY --from=base /app/.next ./.next
