@@ -3,11 +3,6 @@
 
 FROM node:24-slim AS base
 
-# 安装依赖
-RUN apt-get update && apt-get install -y \
-    openssl \
-    && rm -rf /var/lib/apt/lists/*
-
 # 设置工作目录
 WORKDIR /app
 
@@ -17,10 +12,7 @@ COPY package.json pnpm-lock.yaml* .npmrc* ./
 # 安装 pnpm
 RUN npm install -g pnpm
 
-# 如果没有 .npmrc，创建一个启用构建脚本的配置
-RUN if [ ! -f .npmrc ]; then echo "ignore-scripts=false" > .npmrc; fi
-
-# 安装项目依赖
+# 安装项目依赖（.npmrc 已配置允许构建脚本）
 RUN pnpm install
 
 # 复制项目代码
@@ -34,13 +26,7 @@ FROM node:24-slim AS production
 
 WORKDIR /app
 
-# 安装运行时依赖（openssl）
-RUN which openssl || (apt-get update && apt-get install -y openssl && rm -rf /var/lib/apt/lists/*)
-
-# 安装 pnpm
-RUN npm install -g pnpm
-
-# 从构建阶段复制完整的 node_modules
+# 从构建阶段复制完整的 node_modules（包含已编译的原生模块）
 COPY --from=base /app/node_modules ./node_modules
 
 # 从构建阶段复制构建产物
