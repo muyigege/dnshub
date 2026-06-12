@@ -17,8 +17,8 @@ COPY package.json pnpm-lock.yaml* ./
 # 安装 pnpm
 RUN npm install -g pnpm
 
-# 安装项目依赖
-RUN pnpm install
+# 安装项目依赖（强制运行构建脚本）
+RUN pnpm install --unsafe-perm --shamefully-hoist --config.ignore-scripts=false
 
 # 复制项目代码
 COPY . .
