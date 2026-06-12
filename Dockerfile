@@ -11,14 +11,17 @@ RUN apt-get update && apt-get install -y \
 # 设置工作目录
 WORKDIR /app
 
-# 复制依赖文件
-COPY package.json pnpm-lock.yaml* ./
+# 复制依赖文件和 .npmrc
+COPY package.json pnpm-lock.yaml* .npmrc* ./
 
 # 安装 pnpm
 RUN npm install -g pnpm
 
-# 安装项目依赖（强制运行构建脚本）
-RUN pnpm install --unsafe-perm --shamefully-hoist --config.ignore-scripts=false
+# 如果没有 .npmrc，创建一个启用构建脚本的配置
+RUN if [ ! -f .npmrc ]; then echo "ignore-scripts=false" > .npmrc; fi
+
+# 安装项目依赖
+RUN pnpm install
 
 # 复制项目代码
 COPY . .
