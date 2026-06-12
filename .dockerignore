@@ -1,0 +1,10 @@
+node_modules
+.next
+.git
+.coze
+.cozeproj
+npm-debug.log
+build.log
+tsc.log
+tmp
+tsconfig.tsbuildinfo

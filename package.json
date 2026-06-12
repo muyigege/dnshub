@@ -1,0 +1,56 @@
+{
+  "name": "universal-dns-hub",
+  "version": "1.0.0",
+  "private": false,
+  "license": "MIT",
+  "description": "🌐 多云域名管理系统 - 统一管理 Cloudflare、阿里云、腾讯云等 DNS 服务商",
+  "author": "Universal DNS Hub Team",
+  "homepage": "https://github.com/your-username/universal-dns-hub#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-username/universal-dns-hub"
+  },
+  "keywords": [
+    "dns",
+    "cloudflare",
+    "alidns",
+    "dnspod",
+    "domain-management",
+    "nextjs",
+    "typescript"
+  ],
+  "scripts": {
+    "dev": "next dev -p 5000",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "db:generate": "drizzle-kit generate",
+    "db:push": "drizzle-kit push",
+    "db:studio": "drizzle-kit studio",
+    "db:seed": "tsx src/lib/db/seed.ts"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.958.0",
+    "@aws-sdk/lib-storage": "^3.958.0",
+    "@libsql/client": "^0.17.0",
+    "drizzle-orm": "^0.45.1",
+    "drizzle-zod": "^0.8.3",
+    "lucide-react": "^0.562.0",
+    "next": "16.0.10",
+    "react": "19.2.1",
+    "react-dom": "19.2.1",
+    "zod": "^4.2.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "drizzle-kit": "^0.31.9",
+    "eslint": "^9",
+    "eslint-config-next": "16.0.10",
+    "tailwindcss": "^4",
+    "tsx": "^4.21.0",
+    "typescript": "^5"
+  }
+}
