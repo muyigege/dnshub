@@ -1,13 +1,17 @@
 'use client';
 
 import { useState } from 'react';
-import { Download, Upload, AlertCircle, CheckCircle, RefreshCw } from 'lucide-react';
+import { Download, Upload, AlertCircle, CheckCircle, RefreshCw, Eye, EyeOff, Shield } from 'lucide-react';
 
 export default function ConfigPage() {
   const [exporting, setExporting] = useState(false);
   const [importing, setImporting] = useState(false);
   const [importFile, setImportFile] = useState<File | null>(null);
   const [overwrite, setOverwrite] = useState(false);
+  const [exportPassword, setExportPassword] = useState('');
+  const [importPassword, setImportPassword] = useState('');
+  const [showExportPassword, setShowExportPassword] = useState(false);
+  const [showImportPassword, setShowImportPassword] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   const handleExport = async () => {
@@ -15,12 +19,13 @@ export default function ConfigPage() {
     setMessage(null);
 
     try {
-      const response = await fetch('/api/config');
+      const params = exportPassword ? `?password=${encodeURIComponent(exportPassword)}` : '';
+      const response = await fetch(`/api/config${params}`);
       const result = await response.json();
 
       if (result.success) {
         // 创建下载文件
-        const blob = new Blob([JSON.stringify(result.data, null, 2)], { type: 'application/json' });
+        const blob = new Blob([JSON.stringify(result, null, 2)], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
@@ -30,7 +35,11 @@ export default function ConfigPage() {
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
 
-        setMessage({ type: 'success', text: '配置导出成功！' });
+        if (exportPassword) {
+          setMessage({ type: 'success', text: '配置已加密导出成功！请牢记您的密码。' });
+        } else {
+          setMessage({ type: 'success', text: '配置导出成功！' });
+        }
       } else {
         setMessage({ type: 'error', text: result.error || '导出失败' });
       }
@@ -65,21 +74,39 @@ export default function ConfigPage() {
 
     try {
       const content = await importFile.text();
-      const data = JSON.parse(content);
+      const jsonData = JSON.parse(content);
+
+      // 判断是否是加密文件
+      const isEncrypted = jsonData.encrypted === true;
+
+      const body: Record<string, unknown> = {
+        data: isEncrypted ? jsonData.data : jsonData.data,
+        overwrite,
+      };
+
+      if (isEncrypted || importPassword) {
+        if (!importPassword) {
+          setMessage({ type: 'error', text: '此配置文件已加密，请输入解密密码' });
+          setImporting(false);
+          return;
+        }
+        body.password = importPassword;
+      }
 
       const response = await fetch('/api/config', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ data: data.data, overwrite }),
+        body: JSON.stringify(body),
       });
 
       const result = await response.json();
 
       if (result.success) {
-        setMessage({ type: 'success', text: '配置导入成功！' });
+        setMessage({ type: 'success', text: result.message || '配置导入成功！' });
         setImportFile(null);
+        setImportPassword('');
         const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
         if (fileInput) fileInput.value = '';
       } else {
@@ -110,8 +137,38 @@ export default function ConfigPage() {
           </h2>
           <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
             将所有配置（包括服务商、AI 配置、域名和记录）导出为 JSON 文件。
-            请注意：API 密钥等敏感信息会以加密形式存储在导出文件中。
+            设置密码可保护导出文件，在不同系统间安全迁移。
           </p>
+
+          {/* 密码输入 */}
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              <Shield className="w-4 h-4 inline mr-1" />
+              加密密码（可选，推荐）
+            </label>
+            <div className="relative">
+              <input
+                type={showExportPassword ? 'text' : 'password'}
+                value={exportPassword}
+                onChange={(e) => setExportPassword(e.target.value)}
+                placeholder="设置导出密码，导入时需要输入"
+                className="w-full px-3 py-2 pr-10 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              />
+              <button
+                type="button"
+                onClick={() => setShowExportPassword(!showExportPassword)}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+              >
+                {showExportPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
+            </div>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+              {exportPassword
+                ? '将使用密码加密导出文件，不同系统间可安全迁移'
+                : '不设密码则明文导出（仅本系统迁移时使用）'}
+            </p>
+          </div>
+
           <button
             onClick={handleExport}
             disabled={exporting}
@@ -129,7 +186,8 @@ export default function ConfigPage() {
             导入配置
           </h2>
           <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
-            从之前导出的 JSON 文件导入配置。如果系统已有数据，请勾选覆盖选项。
+            从之前导出的 JSON 文件导入配置。如果有加密密码，请填入。
+            系统会自动完成跨环境密钥迁移。
           </p>
 
           <div className="space-y-4">
@@ -148,6 +206,30 @@ export default function ConfigPage() {
               </div>
             )}
 
+            {/* 文件密码输入 */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                <Shield className="w-4 h-4 inline mr-1" />
+                文件解密密码
+              </label>
+              <div className="relative">
+                <input
+                  type={showImportPassword ? 'text' : 'password'}
+                  value={importPassword}
+                  onChange={(e) => setImportPassword(e.target.value)}
+                  placeholder="如果导出时设置了密码，在此输入"
+                  className="w-full px-3 py-2 pr-10 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:ring-2 focus:ring-green-500 focus:border-green-500"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowImportPassword(!showImportPassword)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                >
+                  {showImportPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+            </div>
+
             <div className="flex items-center gap-2">
               <input
                 type="checkbox"
@@ -160,7 +242,7 @@ export default function ConfigPage() {
                 覆盖现有数据
               </label>
               <span className="text-xs text-gray-500 dark:text-gray-500">
-                （警告：将删除所有现有配置）
+                （将删除所有现有配置）
               </span>
             </div>
 
@@ -178,8 +260,8 @@ export default function ConfigPage() {
         {/* 提示信息 */}
         {message && (
           <div className={`mt-6 p-4 rounded-lg flex items-center gap-3 ${
-            message.type === 'success' 
-              ? 'bg-green-50 border border-green-200 dark:bg-green-900/30 dark:border-green-800' 
+            message.type === 'success'
+              ? 'bg-green-50 border border-green-200 dark:bg-green-900/30 dark:border-green-800'
               : 'bg-red-50 border border-red-200 dark:bg-red-900/30 dark:border-red-800'
           }`}>
             {message.type === 'success' ? (
@@ -195,12 +277,13 @@ export default function ConfigPage() {
 
         {/* 注意事项 */}
         <div className="mt-6 p-4 bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-800 rounded-lg">
-          <h3 className="text-sm font-semibold text-yellow-800 dark:text-yellow-200 mb-2">⚠️ 重要提示</h3>
+          <h3 className="text-sm font-semibold text-yellow-800 dark:text-yellow-200 mb-2">使用说明</h3>
           <ul className="text-sm text-yellow-700 dark:text-yellow-300 space-y-1">
-            <li>• 导出的配置文件包含加密的敏感信息，请妥善保管</li>
-            <li>• 导入前请确保目标系统的加密密钥与源系统相同</li>
-            <li>• 覆盖模式将删除所有现有数据，请谨慎操作</li>
-            <li>• 建议在导入前先导出当前配置作为备份</li>
+            <li>导出的配置文件包含加密的敏感信息，请妥善保管</li>
+            <li>设置密码后，文件内容将被加密保护，不同系统间安全迁移</li>
+            <li>导入时输入相同密码，系统会自动完成跨环境密钥迁移</li>
+            <li>覆盖模式将删除所有现有数据，请谨慎操作</li>
+            <li>建议在导入前先导出当前配置作为备份</li>
           </ul>
         </div>
       </main>

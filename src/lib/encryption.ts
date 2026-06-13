@@ -126,6 +126,57 @@ export const verifyEncryption = (): boolean => {
   }
 };
 
+// ============================================================
+// 密码派生加解密 —— 用于导出/导入配置文件的密码保护
+// ============================================================
+
+const PASSWORD_SALT_LENGTH = 32;
+const PASSWORD_IV_LENGTH = 16;
+const PASSWORD_TAG_LENGTH = 16;
+const PASSWORD_ITERATIONS = 200000; // 高强度迭代，防止暴力破解
+
+/**
+ * 用用户密码加密数据（用于导出配置文件时的密码保护）
+ * 格式: salt(32B) + iv(16B) + tag(16B) + ciphertext
+ * @param plaintext - 待加密的明文数据
+ * @param password - 用户设定的密码
+ * @returns Base64 编码的密文
+ */
+export const encryptWithPassword = (plaintext: string, password: string): string => {
+  const salt = crypto.randomBytes(PASSWORD_SALT_LENGTH);
+  const iv = crypto.randomBytes(PASSWORD_IV_LENGTH);
+
+  const key = crypto.pbkdf2Sync(password, salt, PASSWORD_ITERATIONS, 32, 'sha256');
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+
+  const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+
+  const combined = Buffer.concat([salt, iv, tag, encrypted]);
+  return combined.toString('base64');
+};
+
+/**
+ * 用用户密码解密数据（用于导入配置文件时的密码验证）
+ * @param encoded - Base64 编码的密文
+ * @param password - 用户输入的密码
+ * @returns 解密后的明文，密码错误抛出 Error
+ */
+export const decryptWithPassword = (encoded: string, password: string): string => {
+  const combined = Buffer.from(encoded, 'base64');
+  const salt = combined.subarray(0, PASSWORD_SALT_LENGTH);
+  const iv = combined.subarray(PASSWORD_SALT_LENGTH, PASSWORD_SALT_LENGTH + PASSWORD_IV_LENGTH);
+  const tag = combined.subarray(PASSWORD_SALT_LENGTH + PASSWORD_IV_LENGTH, PASSWORD_SALT_LENGTH + PASSWORD_IV_LENGTH + PASSWORD_TAG_LENGTH);
+  const encrypted = combined.subarray(PASSWORD_SALT_LENGTH + PASSWORD_IV_LENGTH + PASSWORD_TAG_LENGTH);
+
+  const key = crypto.pbkdf2Sync(password, salt, PASSWORD_ITERATIONS, 32, 'sha256');
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+  decipher.setAuthTag(tag);
+
+  const decrypted = Buffer.concat([decipher.update(encrypted), decipher.final()]);
+  return decrypted.toString('utf8');
+};
+
 // 导出类型定义
 export type CredentialData = {
   [key: string]: string | number | boolean;
