@@ -31,7 +31,7 @@ export function DashboardStats() {
 
   if (loading) {
     return (
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {[1, 2, 3].map(i => (
           <div key={i} className="bg-gray-100 dark:bg-gray-800 rounded-lg p-6 animate-pulse" />
         ))}
@@ -40,7 +40,7 @@ export function DashboardStats() {
   }
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
       {/* 服务商统计 */}
       <div className="bg-white dark:bg-gray-800 rounded-lg p-6 shadow-sm border border-gray-200 dark:border-gray-700">
         <div className="flex items-center justify-between">

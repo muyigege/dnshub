@@ -147,7 +147,7 @@ export function AIMagicBox() {
           disabled={parseState.status === 'parsing' || executeState.isExecuting}
         />
 
-        <div className="flex justify-between items-center mt-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mt-4">
           <p className="text-sm text-gray-500 dark:text-gray-400">
             输入自然语言指令，AI 会自动解析
           </p>
@@ -164,7 +164,7 @@ export function AIMagicBox() {
       {/* 解析结果 */}
       {parseState.status === 'success' && (
         <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg p-6">
-          <div className="flex items-start justify-between">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
             <div className="flex-1">
               <h3 className="text-lg font-semibold text-green-900 dark:text-green-300 mb-3">
                 ✅ AI 解析成功
@@ -185,7 +185,7 @@ export function AIMagicBox() {
                 <div className="space-y-3 mb-4">
                   {parseState.result.instructions?.map((instruction: any, idx: number) => (
                     <div key={idx} className="bg-white dark:bg-gray-800 rounded-lg p-4 border border-gray-200 dark:border-gray-700">
-                      <div className="flex items-center justify-between mb-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
                         <span className="text-xs font-semibold text-blue-600 dark:text-blue-400">
                           #{idx + 1}
                         </span>
@@ -193,7 +193,7 @@ export function AIMagicBox() {
                           {instruction.action}
                         </span>
                       </div>
-                      <div className="grid grid-cols-2 gap-4 text-sm">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 text-sm">
                         <div>
                           <span className="text-gray-600 dark:text-gray-400">记录类型:</span>
                           <span className="ml-2 font-semibold text-gray-900 dark:text-white">
@@ -243,7 +243,7 @@ export function AIMagicBox() {
               ) : (
                 // 单条操作：展示单个卡片
                 <div className="bg-white dark:bg-gray-800 rounded-lg p-4 border border-gray-200 dark:border-gray-700 mb-4">
-                  <div className="grid grid-cols-2 gap-4 text-sm">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6 text-sm">
                     <div>
                       <span className="text-gray-600 dark:text-gray-400">操作类型:</span>
                       <span className="ml-2 font-semibold text-gray-900 dark:text-white">
@@ -359,7 +359,7 @@ export function AIMagicBox() {
                                 : 'bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800'
                             }`}
                           >
-                            <div className="flex items-center justify-between">
+                            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                               <span className="text-sm font-medium">
                                 #{result.index} - {result.instruction?.type} {result.instruction?.name}
                               </span>
@@ -386,7 +386,7 @@ export function AIMagicBox() {
               )}
 
               {/* 操作按钮 */}
-              <div className="flex gap-3">
+              <div className="flex flex-col gap-3 sm:flex-row">
                 <button
                   onClick={handleExecute}
                   disabled={executeState.isExecuting || (executeState.result?.success === true)}
@@ -456,7 +456,7 @@ export function AIMagicBox() {
       {/* 错误 */}
       {parseState.status === 'error' && (
         <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-6">
-          <div className="flex items-start justify-between">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
             <div>
               <h3 className="text-lg font-semibold text-red-900 dark:text-red-300 mb-2">
                 ❌ 解析失败

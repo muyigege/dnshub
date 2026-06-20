@@ -3,6 +3,17 @@
 import { useState } from 'react';
 import { Download, Upload, AlertCircle, CheckCircle, RefreshCw, Eye, EyeOff, Shield } from 'lucide-react';
 
+type ImportPreview = {
+  encrypted: boolean;
+  counts?: {
+    providers: number;
+    aiConfigs: number;
+    domains: number;
+    records: number;
+  };
+  error?: string;
+};
+
 export default function ConfigPage() {
   const [exporting, setExporting] = useState(false);
   const [importing, setImporting] = useState(false);
@@ -12,6 +23,7 @@ export default function ConfigPage() {
   const [importPassword, setImportPassword] = useState('');
   const [showExportPassword, setShowExportPassword] = useState(false);
   const [showImportPassword, setShowImportPassword] = useState(false);
+  const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   const handleExport = async () => {
@@ -50,16 +62,27 @@ export default function ConfigPage() {
     }
   };
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
       if (!file.name.endsWith('.json')) {
         setMessage({ type: 'error', text: '请选择 JSON 文件' });
         setImportFile(null);
+        setImportPreview(null);
         return;
       }
-      setImportFile(file);
-      setMessage(null);
+
+      try {
+        const content = await file.text();
+        const jsonData = JSON.parse(content);
+        setImportFile(file);
+        setImportPreview(getImportPreview(jsonData));
+        setMessage(null);
+      } catch (error) {
+        setImportFile(null);
+        setImportPreview({ encrypted: false, error: error instanceof Error ? error.message : '文件不是有效的 JSON 配置' });
+        setMessage({ type: 'error', text: '文件不是有效的 JSON 配置' });
+      }
     }
   };
 
@@ -76,21 +99,12 @@ export default function ConfigPage() {
       const content = await importFile.text();
       const jsonData = JSON.parse(content);
 
-      // 判断是否是加密文件
-      const isEncrypted = jsonData.encrypted === true;
-
-      const body: Record<string, unknown> = {
-        data: isEncrypted ? jsonData.data : jsonData.data,
-        overwrite,
-      };
-
-      if (isEncrypted || importPassword) {
+      if (isEncryptedConfig(jsonData) || importPassword) {
         if (!importPassword) {
           setMessage({ type: 'error', text: '此配置文件已加密，请输入解密密码' });
           setImporting(false);
           return;
         }
-        body.password = importPassword;
       }
 
       const response = await fetch('/api/config', {
@@ -98,7 +112,11 @@ export default function ConfigPage() {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(body),
+        body: JSON.stringify({
+          data: jsonData,
+          password: importPassword || undefined,
+          overwrite,
+        }),
       });
 
       const result = await response.json();
@@ -106,11 +124,13 @@ export default function ConfigPage() {
       if (result.success) {
         setMessage({ type: 'success', text: result.message || '配置导入成功！' });
         setImportFile(null);
+        setImportPreview(null);
         setImportPassword('');
+        setOverwrite(false);
         const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
         if (fileInput) fileInput.value = '';
       } else {
-        setMessage({ type: 'error', text: result.error || '导入失败' });
+        setMessage({ type: 'error', text: result.error || result.messageCn || '导入失败' });
       }
     } catch (error) {
       setMessage({ type: 'error', text: error instanceof Error ? error.message : '导入失败，文件格式不正确' });
@@ -121,7 +141,7 @@ export default function ConfigPage() {
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
-      <main className="max-w-2xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <main className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="mb-8">
           <h1 className="text-3xl font-bold text-gray-900 dark:text-white">配置备份与迁移</h1>
           <p className="mt-2 text-gray-600 dark:text-gray-400">
@@ -130,7 +150,8 @@ export default function ConfigPage() {
         </div>
 
         {/* 导出区域 */}
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6 mb-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6">
           <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
             <Download className="w-5 h-5 text-blue-600" />
             导出配置
@@ -172,7 +193,7 @@ export default function ConfigPage() {
           <button
             onClick={handleExport}
             disabled={exporting}
-            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 transition-colors"
+            className="flex w-full items-center justify-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 transition-colors sm:w-auto"
           >
             {exporting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
             {exporting ? '导出中...' : '导出配置'}
@@ -191,18 +212,28 @@ export default function ConfigPage() {
           </p>
 
           <div className="space-y-4">
-            <div className="flex items-center gap-3">
+            <div className="flex w-full items-center gap-3">
               <input
                 type="file"
                 accept=".json"
                 onChange={handleFileChange}
-                className="flex-1 text-sm text-gray-500 dark:text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-medium file:bg-blue-100 file:text-blue-700 hover:file:bg-blue-200"
+                className="w-full text-sm text-gray-500 dark:text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-medium file:bg-blue-100 file:text-blue-700 hover:file:bg-blue-200"
               />
             </div>
 
             {importFile && (
-              <div className="text-sm text-gray-600 dark:text-gray-400">
-                已选择文件: <span className="font-medium">{importFile.name}</span>
+              <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700 dark:border-gray-700 dark:bg-gray-900/40 dark:text-gray-300">
+                <div className="font-medium text-gray-900 dark:text-white">{importFile.name}</div>
+                {importPreview?.encrypted ? (
+                  <p className="mt-1 text-amber-700 dark:text-amber-300">此文件已加密，输入导出时设置的密码后即可导入。</p>
+                ) : importPreview?.counts ? (
+                  <p className="mt-1">
+                    包含 {importPreview.counts.providers} 个服务商、{importPreview.counts.aiConfigs} 个 AI 配置、
+                    {importPreview.counts.domains} 个域名、{importPreview.counts.records} 条 DNS 记录。
+                  </p>
+                ) : importPreview?.error ? (
+                  <p className="mt-1 text-red-600 dark:text-red-400">{importPreview.error}</p>
+                ) : null}
               </div>
             )}
 
@@ -230,7 +261,7 @@ export default function ConfigPage() {
               </div>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <input
                 type="checkbox"
                 id="overwrite"
@@ -239,22 +270,23 @@ export default function ConfigPage() {
                 className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
               />
               <label htmlFor="overwrite" className="text-sm text-gray-700 dark:text-gray-300">
-                覆盖现有数据
+                替换当前配置
               </label>
               <span className="text-xs text-gray-500 dark:text-gray-500">
-                （将删除所有现有配置）
+                （导入前会清空现有服务商、域名、记录和 AI 配置）
               </span>
             </div>
 
             <button
               onClick={handleImport}
-              disabled={importing || !importFile}
-              className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 transition-colors"
+              disabled={importing || !importFile || !!importPreview?.error}
+              className="flex w-full items-center justify-center gap-2 px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 transition-colors sm:w-auto"
             >
               {importing ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
               {importing ? '导入中...' : '导入配置'}
             </button>
           </div>
+        </div>
         </div>
 
         {/* 提示信息 */}
@@ -279,14 +311,52 @@ export default function ConfigPage() {
         <div className="mt-6 p-4 bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-800 rounded-lg">
           <h3 className="text-sm font-semibold text-yellow-800 dark:text-yellow-200 mb-2">使用说明</h3>
           <ul className="text-sm text-yellow-700 dark:text-yellow-300 space-y-1">
-            <li>导出的配置文件包含加密的敏感信息，请妥善保管</li>
-            <li>设置密码后，文件内容将被加密保护，不同系统间安全迁移</li>
+            <li>跨设备迁移建议设置导出密码，源系统密钥只会保存在加密文件内容中</li>
+            <li>未设置密码的导出文件仅建议用于本机快速备份恢复</li>
             <li>导入时输入相同密码，系统会自动完成跨环境密钥迁移</li>
-            <li>覆盖模式将删除所有现有数据，请谨慎操作</li>
+            <li>替换当前配置会删除现有数据，但导入失败会自动回滚</li>
             <li>建议在导入前先导出当前配置作为备份</li>
           </ul>
         </div>
       </main>
     </div>
   );
+}
+
+function getImportPreview(jsonData: unknown): ImportPreview {
+  if (isEncryptedConfig(jsonData)) {
+    return { encrypted: true };
+  }
+
+  const payload = unwrapExportPayload(jsonData);
+  if (!payload) {
+    return { encrypted: false, error: '无法识别的配置文件结构' };
+  }
+
+  const data = isRecord(payload.data) ? payload.data : payload;
+  const counts = {
+    providers: Array.isArray(data.providers) ? data.providers.length : 0,
+    aiConfigs: Array.isArray(data.aiConfigs) ? data.aiConfigs.length : 0,
+    domains: Array.isArray(data.domains) ? data.domains.length : 0,
+    records: Array.isArray(data.records) ? data.records.length : 0,
+  };
+
+  const total = counts.providers + counts.aiConfigs + counts.domains + counts.records;
+  return total > 0
+    ? { encrypted: false, counts }
+    : { encrypted: false, error: '配置文件中没有可导入的数据' };
+}
+
+function isEncryptedConfig(jsonData: unknown): boolean {
+  return isRecord(jsonData) && jsonData.encrypted === true && typeof jsonData.data === 'string';
+}
+
+function unwrapExportPayload(jsonData: unknown): Record<string, unknown> | null {
+  if (!isRecord(jsonData)) return null;
+  if ('success' in jsonData && isRecord(jsonData.data)) return jsonData.data;
+  return jsonData;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

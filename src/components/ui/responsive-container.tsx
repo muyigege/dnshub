@@ -3,7 +3,7 @@ import { ReactNode } from 'react';
 // 全局主视口容器，限制最大宽度并提供响应式边距
 export function ResponsiveContainer({ children }: { children: ReactNode }) {
   return (
-    <div className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 tracking-wide">
+    <div className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
       {children}
     </div>
   );
@@ -12,13 +12,13 @@ export function ResponsiveContainer({ children }: { children: ReactNode }) {
 // 响应式网格：移动端 1 列，平板 2 列，桌面 3 列，布局紧凑统一
 export function ResponsiveGrid({ children, cols = 3 }: { children: ReactNode; cols?: 2 | 3 | 4 | 5 }) {
   const colClass = {
-    2: 'grid-cols-1 sm:grid-cols-2',
-    3: 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3',
-    4: 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-4',
-    5: 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5',
+    2: 'grid-cols-1 md:grid-cols-2',
+    3: 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3',
+    4: 'grid-cols-1 md:grid-cols-2 lg:grid-cols-4',
+    5: 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5',
   };
   return (
-    <div className={`grid ${colClass[cols]} gap-4 sm:gap-6`}>
+    <div className={`grid ${colClass[cols]} gap-6`}>
       {children}
     </div>
   );
@@ -27,7 +27,7 @@ export function ResponsiveGrid({ children, cols = 3 }: { children: ReactNode; co
 // 移动端横向无缝滚动表格容器：防止撑破视口，支持移动端首列或操作列的自适应
 export function ResponsiveTable({ children }: { children: ReactNode }) {
   return (
-    <div className="w-full overflow-x-auto rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 shadow-sm">
+    <div className="w-full overflow-x-auto scrollbar-thin rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 shadow-sm">
       <div className="min-w-[640px] align-middle">
         {children}
       </div>
@@ -47,17 +47,16 @@ export function InlineActionKeeper({
   width?: 'small' | 'normal' | 'large';
 }) {
   const widthConfig = {
-    small: { confirming: 'w-32 min-w-[128px]', normal: 'w-20 min-w-[80px]' },
-    normal: { confirming: 'w-40 min-w-[160px]', normal: 'w-24 min-w-[96px]' },
-    large: { confirming: 'w-48 min-w-[192px]', normal: 'w-28 min-w-[112px]' },
+    small: 'w-32 min-w-[128px]',
+    normal: 'w-40 min-w-[160px]',
+    large: 'w-72 min-w-[288px]',
   };
   
-  const widthClass = isConfirming 
-    ? widthConfig[width].confirming 
-    : widthConfig[width].normal;
-  
   return (
-    <div className={`relative flex items-center justify-end transition-all duration-200 flex-shrink-0 ${widthClass}`}>
+    <div
+      data-confirming={isConfirming}
+      className={`relative flex max-w-full items-center justify-end flex-shrink-0 ${widthConfig[width]}`}
+    >
       {children}
     </div>
   );
@@ -97,7 +96,7 @@ export function MobileBottomPanel({
       />
       
       {/* 面板内容 */}
-      <div className="relative bg-white dark:bg-neutral-900 rounded-t-2xl shadow-xl max-h-[85dvh] flex flex-col">
+      <div className="relative bg-white dark:bg-neutral-900 rounded-t-2xl shadow-xl h-dvh max-h-[85dvh] flex flex-col">
         {/* 标题栏 */}
         {title && (
           <div className="flex items-center justify-between px-4 py-3 border-b border-neutral-200 dark:border-neutral-800">

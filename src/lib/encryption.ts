@@ -1,7 +1,35 @@
 import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
 
-// 从环境变量获取加密密钥（必须为 32 字节，对应 AES-256）
-const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || crypto.randomBytes(32).toString('hex');
+// 从环境变量或本地持久文件获取加密密钥，避免进程重启后无法解密旧数据。
+const loadEncryptionKey = (): string => {
+  const envKey = process.env.ENCRYPTION_KEY?.trim();
+  if (envKey) return envKey;
+
+  const dataDir = path.resolve(process.cwd(), 'data');
+  const keyPath = path.resolve(dataDir, 'encryption.key');
+
+  try {
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true });
+    }
+
+    if (fs.existsSync(keyPath)) {
+      const savedKey = fs.readFileSync(keyPath, 'utf8').trim();
+      if (savedKey) return savedKey;
+    }
+
+    const generatedKey = crypto.randomBytes(32).toString('hex');
+    fs.writeFileSync(keyPath, `${generatedKey}\n`, { mode: 0o600 });
+    return generatedKey;
+  } catch (error) {
+    console.warn('Failed to load persistent encryption key, using process-local fallback:', error);
+    return crypto.randomBytes(32).toString('hex');
+  }
+};
+
+const ENCRYPTION_KEY = loadEncryptionKey();
 const ALGORITHM = 'aes-256-gcm';
 const IV_LENGTH = 16; // 初始化向量长度
 const SALT_LENGTH = 64; // 盐值长度
@@ -15,6 +43,8 @@ const ENCRYPTED_POSITION = TAG_POSITION + TAG_LENGTH;
 const deriveKey = (salt: Buffer): Buffer => {
   return crypto.pbkdf2Sync(ENCRYPTION_KEY, salt, 100000, 32, 'sha256');
 };
+
+export const getEncryptionSecret = (): string => ENCRYPTION_KEY;
 
 /**
  * 加密文本

@@ -272,8 +272,8 @@ export default function AIMagicPage() {
     return (
         <div className="min-h-screen bg-slate-100 dark:bg-slate-950 flex flex-col">
             {/* 顶部 Header */}
-            <header className="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-6 py-4">
-                <div className="max-w-7xl mx-auto flex items-center justify-between">
+            <header className="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800">
+                <div className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex items-center justify-between">
                     <div className="flex items-center gap-3">
                         <Sparkles className="w-7 h-7 text-purple-600" />
                         <div>
@@ -289,9 +289,9 @@ export default function AIMagicPage() {
 
             {/* 设置面板 */}
             {showSettings && (
-                <div className="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-6 py-4">
-                    <div className="max-w-7xl mx-auto flex items-center gap-6">
-                        <label className="flex items-center gap-2 cursor-pointer">
+                <div className="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800">
+                    <div className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex flex-col items-start gap-3 sm:flex-row sm:items-center">
+                        <label className="flex flex-wrap items-center gap-2 cursor-pointer">
                             <input type="checkbox" checked={autoExecute} onChange={(e) => setAutoExecute(e.target.checked)} className="w-4 h-4 text-purple-600 rounded border-slate-300 focus:ring-purple-500" />
                             <span className="text-sm text-slate-700 dark:text-slate-300">自动执行模式</span>
                             <span className="text-xs text-slate-500">（单条操作解析后直接执行，无需确认）</span>
@@ -301,8 +301,8 @@ export default function AIMagicPage() {
             )}
 
             {/* 主内容区 */}
-            <main className="flex-1 max-w-7xl w-full mx-auto p-6">
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 h-[calc(100vh-180px)]">
+            <main className="flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 lg:h-[calc(100dvh-180px)]">
                     {/* 左侧：输入和解析结果 */}
                     <div className="lg:col-span-2 flex flex-col gap-4">
                         {/* 输入框 */}
@@ -319,7 +319,7 @@ export default function AIMagicPage() {
                                     }
                                 }}
                             />
-                            <div className="mt-3 flex items-center justify-between">
+                            <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                                 <div className="flex items-center gap-2">
                                     {autoExecute && (
                                         <span className="inline-flex items-center gap-1 px-2 py-1 bg-green-100 dark:bg-green-900/50 text-green-700 dark:text-green-400 text-xs rounded-full">
@@ -394,7 +394,7 @@ export default function AIMagicPage() {
                                     确认执行
                                 </h3>
                                 <div className="bg-white dark:bg-slate-800 rounded-lg p-4">
-                                    <div className="flex items-center gap-4">
+                                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
                                         <span className={`px-3 py-1 rounded-full text-sm font-bold ${getActionDisplay(parsedIntent.action).color}`}>
                                             [{getActionDisplay(parsedIntent.action).cn}/{getActionDisplay(parsedIntent.action).en}]
                                         </span>
@@ -415,7 +415,7 @@ export default function AIMagicPage() {
                                         </div>
                                     )}
                                 </div>
-                                <div className="mt-3 flex gap-2">
+                                <div className="mt-3 flex flex-col gap-2 sm:flex-row">
                                     <button onClick={handleExecute} disabled={isExecuting} className="flex-1 flex justify-center items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 transition-colors">
                                         <CheckCircle className="w-4 h-4" />
                                         确认执行
@@ -434,9 +434,9 @@ export default function AIMagicPage() {
                                     <AlertCircle className="w-4 h-4" />
                                     批量操作预览（共 {batchIntent.instructions.length} 项）
                                 </h3>
-                                <div className="bg-white dark:bg-slate-800 rounded-lg overflow-hidden">
+                                <div className="bg-white dark:bg-slate-800 rounded-lg overflow-x-auto scrollbar-thin">
                                     {/* 表格头部 */}
-                                    <div className="grid grid-cols-12 gap-2 px-4 py-2 bg-slate-100 dark:bg-slate-700 text-xs font-semibold text-slate-600">
+                                    <div className="grid min-w-[720px] grid-cols-12 gap-2 px-4 py-2 bg-slate-100 dark:bg-slate-700 text-xs font-semibold text-slate-600">
                                         <div className="col-span-2">序号</div>
                                         <div className="col-span-2">操作</div>
                                         <div className="col-span-1">类型</div>
@@ -449,7 +449,7 @@ export default function AIMagicPage() {
                                         const actionInfo = getActionDisplay(instruction.action);
                                         const isExecuting = currentExecIndex === index;
                                         return (
-                                            <div key={index} className={`grid grid-cols-12 gap-2 px-4 py-2 border-t border-slate-200 dark:border-slate-700 items-center hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors`}>
+                                            <div key={index} className={`grid min-w-[720px] grid-cols-12 gap-2 px-4 py-2 border-t border-slate-200 dark:border-slate-700 items-center hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors`}>
                                                 <div className="col-span-2 flex items-center">
                                                     {isExecuting ? (
                                                         <Loader2 className="w-4 h-4 animate-spin text-indigo-600" />
@@ -494,7 +494,7 @@ export default function AIMagicPage() {
                                         );
                                     })}
                                 </div>
-                                <div className="mt-3 flex gap-2">
+                                <div className="mt-3 flex flex-col gap-2 sm:flex-row">
                                     <button onClick={handleExecuteBatch} disabled={isExecuting} className="flex-1 flex justify-center items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 transition-colors">
                                         {isExecuting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
                                         执行全部 {batchIntent.instructions.length} 项
@@ -536,7 +536,7 @@ export default function AIMagicPage() {
                                         {execResult.results.map((item: any, index: number) => {
                                             const actionInfo = getActionDisplay(item.instruction.action);
                                             return (
-                                                <div key={index} className="flex items-center justify-between bg-white dark:bg-slate-800 rounded-lg px-3 py-2">
+                                                <div key={index} className="flex flex-col gap-2 bg-white dark:bg-slate-800 rounded-lg px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
                                                     <div className="flex items-center gap-3">
                                                         <span className={`px-2 py-0.5 rounded text-xs font-bold ${actionInfo.color}`}>
                                                             [{actionInfo.cn}/{actionInfo.en}]
@@ -551,7 +551,7 @@ export default function AIMagicPage() {
                                         })}
                                     </div>
                                 ) : (
-                                    <div className="flex items-center justify-between">
+                                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                                         <p className={`text-sm ${execResult.success ? 'text-green-700 dark:text-green-400' : 'text-red-700 dark:text-red-400'}`}>
                                             {execResult.message}
                                         </p>
@@ -563,7 +563,7 @@ export default function AIMagicPage() {
                     </div>
 
                     {/* 右侧：执行日志 */}
-                    <div className="bg-white dark:bg-slate-900 rounded-xl shadow-sm border border-slate-200 dark:border-slate-800 flex flex-col overflow-hidden">
+                    <div className="bg-white dark:bg-slate-900 rounded-xl shadow-sm border border-slate-200 dark:border-slate-800 flex min-h-[360px] flex-col overflow-hidden lg:min-h-0">
                         <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
                             <h3 className="font-semibold text-slate-900 dark:text-slate-50">执行日志</h3>
                             <button onClick={clearLogs} className="text-xs text-slate-500 hover:text-slate-700 dark:hover:text-slate-300">
@@ -594,7 +594,7 @@ export default function AIMagicPage() {
                                                     {copiedId === log.id ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
                                                 </button>
                                             </div>
-                                            <div className="flex items-center justify-between">
+                                            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                                                 <p className={`${log.status === 'success' ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
                                                     {log.message}
                                                 </p>

@@ -1,8 +1,9 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Plus, Trash2, Edit2, Loader2, CheckCircle, XCircle, ExternalLink, Sparkles, AlertTriangle, X } from 'lucide-react';
+import { Plus, Trash2, Edit2, Loader2, CheckCircle, XCircle, ExternalLink, Sparkles } from 'lucide-react';
 import { useToast } from '@/components/ui/toast';
+import { ResponsiveContainer } from '@/components/ui/responsive-container';
 
 type AIConfig = {
   id: number;
@@ -31,7 +32,6 @@ export default function AIConfigPage() {
   const [editingConfig, setEditingConfig] = useState<AIConfig | null>(null);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message?: string } | null>(null);
-  const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null);
   const [formData, setFormData] = useState({ name: '', providerType: 'custom', apiUrl: '', modelId: '', apiKey: '' });
 
   useEffect(() => { loadConfigs(); }, []);
@@ -88,7 +88,8 @@ export default function AIConfigPage() {
   };
 
   const handleDelete = async (id: number) => {
-    setDeleteConfirm(null);
+    if (!window.confirm('确定删除此 AI 配置吗？')) return;
+
     try {
       const response = await fetch(`/api/ai-config/${id}`, { method: 'DELETE' });
       const result = await response.json();
@@ -145,7 +146,8 @@ export default function AIConfigPage() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-950 dark:to-slate-900">
-      <div className="container mx-auto p-6">
+      <ResponsiveContainer>
+      <div className="py-6 sm:py-8">
         <div className="mb-8">
           <h1 className="text-3xl font-bold text-slate-900 dark:text-slate-50 mb-2 flex items-center gap-2">
             <Sparkles className="w-8 h-8 text-purple-600" />
@@ -156,12 +158,12 @@ export default function AIConfigPage() {
 
         {/* 硅基流动引导卡片 */}
         <div className="bg-gradient-to-r from-purple-50 to-pink-50 dark:from-purple-950/20 dark:to-pink-950/20 border border-purple-200 dark:border-purple-800 rounded-lg p-6 mb-6">
-          <div className="flex items-start justify-between">
+          <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
             <div>
               <h3 className="text-lg font-semibold mb-2 flex items-center gap-2 text-slate-900 dark:text-slate-50"><Sparkles className="w-5 h-5 text-purple-600" />推荐使用硅基流动</h3>
               <p className="text-sm text-slate-600 dark:text-slate-400">兼容 OpenAI 接口，支持 Qwen/DeepSeek 等开源大模型，注册即送额度</p>
             </div>
-            <button onClick={() => window.open('https://cloud.siliconflow.cn/i/8UoNCRqs', '_blank')} className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-colors">
+            <button onClick={() => window.open('https://cloud.siliconflow.cn/i/8UoNCRqs', '_blank')} className="w-full md:w-auto bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center justify-center gap-2 transition-colors">
               <ExternalLink className="w-4 h-4" />
               注册硅基流动（免费额度）
             </button>
@@ -172,7 +174,7 @@ export default function AIConfigPage() {
         <div className="bg-white dark:bg-slate-800 rounded-lg p-6 shadow-sm border border-slate-200 dark:border-slate-700 mb-6">
           <h3 className="text-lg font-semibold mb-2 text-slate-900 dark:text-slate-50">快速开始</h3>
           <p className="text-sm text-slate-600 dark:text-slate-400 mb-4">选择预设模板快速创建配置</p>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             <button onClick={() => handlePresetSelect('deepseek_v3')} className="border border-slate-200 dark:border-slate-700 rounded-lg p-4 text-left hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors">
               <div className="font-semibold mb-1 text-slate-900 dark:text-slate-50">DeepSeek-V3</div>
               <div className="text-sm text-slate-500">高性价比推理模型</div>
@@ -194,12 +196,12 @@ export default function AIConfigPage() {
 
         {/* 配置列表 */}
         <div className="bg-white dark:bg-slate-800 rounded-lg shadow-sm border border-slate-200 dark:border-slate-700">
-          <div className="p-6 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between">
+          <div className="p-6 border-b border-slate-200 dark:border-slate-700 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-50">配置列表</h3>
               <p className="text-sm text-slate-600 dark:text-slate-400">管理所有大模型配置</p>
             </div>
-            <button onClick={() => { resetForm(); setDialogOpen(true); }} className="bg-slate-900 hover:bg-slate-800 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-colors dark:bg-slate-700 dark:hover:bg-slate-600">
+            <button onClick={() => { resetForm(); setDialogOpen(true); }} className="w-full sm:w-auto bg-slate-900 hover:bg-slate-800 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center justify-center gap-2 transition-colors dark:bg-slate-700 dark:hover:bg-slate-600">
               <Plus className="w-4 h-4" />
               添加配置
             </button>
@@ -213,9 +215,9 @@ export default function AIConfigPage() {
             ) : (
               <div className="space-y-4">
                 {configs.map(config => (
-                  <div key={config.id} className="flex items-center justify-between p-4 rounded-lg border bg-slate-50 dark:bg-slate-900 border-slate-200 dark:border-slate-700">
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-1">
+                  <div key={config.id} className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between p-4 rounded-lg border bg-slate-50 dark:bg-slate-900 border-slate-200 dark:border-slate-700">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2 mb-1">
                         <span className="font-semibold text-slate-900 dark:text-slate-50">{config.name}</span>
                         {config.isActive ? (
                           <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300">已激活</span>
@@ -229,22 +231,14 @@ export default function AIConfigPage() {
                         <div className="truncate">{config.apiUrl}</div>
                       </div>
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex w-full flex-shrink-0 items-center justify-end gap-2 sm:w-auto">
                       <button onClick={() => handleToggleActive(config.id, !config.isActive)} className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${config.isActive ? 'bg-purple-600' : 'bg-slate-200 dark:bg-slate-700'}`}>
                         <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${config.isActive ? 'translate-x-6' : 'translate-x-1'}`} />
                       </button>
                       <button onClick={() => handleEdit(config)} className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors">
                         <Edit2 className="w-4 h-4 text-slate-600 dark:text-slate-400" />
                       </button>
-                      {deleteConfirm === config.id ? (
-                        <div className="flex items-center gap-1 bg-red-50 dark:bg-red-900/30 rounded px-2 py-1">
-                          <span className="text-xs text-red-600">确认?</span>
-                          <button onClick={() => handleDelete(config.id)} className="p-1 hover:bg-red-100 dark:hover:bg-red-900/50 rounded"><CheckCircle className="w-4 h-4 text-red-600" /></button>
-                          <button onClick={() => setDeleteConfirm(null)} className="p-1 hover:bg-slate-100 dark:hover:bg-slate-700 rounded"><X className="w-4 h-4 text-slate-400" /></button>
-                        </div>
-                      ) : (
-                        <button onClick={() => setDeleteConfirm(config.id)} className="p-2 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"><Trash2 className="w-4 h-4 text-red-500" /></button>
-                      )}
+                      <button onClick={() => handleDelete(config.id)} className="p-2 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"><Trash2 className="w-4 h-4 text-red-500" /></button>
                     </div>
                   </div>
                 ))}
@@ -256,14 +250,14 @@ export default function AIConfigPage() {
         {/* 添加/编辑对话框 */}
         {dialogOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-            <div className="bg-white dark:bg-slate-800 rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="bg-white dark:bg-slate-800 rounded-lg shadow-xl max-w-2xl w-full max-h-[85dvh] overflow-y-auto">
               <div className="p-6 border-b border-slate-200 dark:border-slate-700">
                 <h2 className="text-xl font-semibold text-slate-900 dark:text-slate-50">{editingConfig ? '编辑配置' : '添加配置'}</h2>
                 <p className="text-sm text-slate-600 dark:text-slate-400 mt-1">配置大模型 API 连接信息</p>
               </div>
 
               <div className="p-6 space-y-4">
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div>
                     <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">配置名称</label>
                     <input type="text" value={formData.name} onChange={e => setFormData({ ...formData, name: e.target.value })} placeholder="如：OpenAI GPT-4" className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-50 focus:ring-2 focus:ring-purple-500 focus:border-transparent" />
@@ -314,6 +308,7 @@ export default function AIConfigPage() {
           </div>
         )}
       </div>
+      </ResponsiveContainer>
     </div>
   );
 }

@@ -2,8 +2,8 @@
 
 import { useState, useEffect, use, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import { RefreshCw, Trash2, CheckCircle, X, Plus, Search, Undo2, Clock, Square, CheckSquare } from 'lucide-react';
-import { ResponsiveContainer, ResponsiveTable, InlineActionKeeper, MobileBottomPanel } from '@/components/ui/responsive-container';
+import { RefreshCw, Trash2, X, Plus, Search, Undo2, Clock, Square, CheckSquare } from 'lucide-react';
+import { ResponsiveContainer, ResponsiveTable, MobileBottomPanel } from '@/components/ui/responsive-container';
 import { useToast } from '@/components/ui/toast';
 
 interface DNSRecord {
@@ -42,11 +42,9 @@ export default function DomainRecordsPage({ params }: { params: Promise<{ id: st
   const [editingRecord, setEditingRecord] = useState<DNSRecord | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [typeFilter, setTypeFilter] = useState<string>('all');
-  const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null);
 
   // 批量操作
   const [selectedRecords, setSelectedRecords] = useState<Set<number>>(new Set());
-  const [batchDeleteConfirm, setBatchDeleteConfirm] = useState(false);
 
   // 同步结果
   const [syncResult, setSyncResult] = useState<{ synced?: number; total?: number; error?: string } | null>(null);
@@ -112,7 +110,8 @@ export default function DomainRecordsPage({ params }: { params: Promise<{ id: st
   };
 
   const handleDelete = async (record: DNSRecord) => {
-    setDeleteConfirm(null);
+    if (!window.confirm(`确定删除 ${record.type} 记录 ${record.name} 吗？`)) return;
+
     try {
       const response = await fetch(`/api/records/${record.id}`, { method: 'DELETE' });
       const result = await response.json();
@@ -126,7 +125,9 @@ export default function DomainRecordsPage({ params }: { params: Promise<{ id: st
   };
 
   const handleBatchDelete = async () => {
-    setBatchDeleteConfirm(false);
+    if (selectedRecords.size === 0) return;
+    if (!window.confirm(`确定删除选中的 ${selectedRecords.size} 条记录吗？`)) return;
+
     const recordsToDelete = records.filter(r => selectedRecords.has(r.id));
     const deletedRecords: DNSRecord[] = [];
     for (const record of recordsToDelete) {
@@ -297,23 +298,12 @@ export default function DomainRecordsPage({ params }: { params: Promise<{ id: st
               
               {/* 操作按钮 */}
               <div className="flex flex-col sm:flex-row sm:items-center gap-2">
-                {/* 批量删除按钮 */}
-                <InlineActionKeeper isConfirming={batchDeleteConfirm && selectedRecords.size > 0} width="large">
-                  {batchDeleteConfirm && selectedRecords.size > 0 ? (
-                    <div className="flex items-center gap-2 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-lg px-3 py-2">
-                      <span className="text-sm text-red-700 dark:text-red-300 whitespace-nowrap">确认删除 {selectedRecords.size} 条?</span>
-                      <button onClick={handleBatchDelete} className="px-2 py-1 bg-red-600 text-white rounded text-sm flex-shrink-0">确认</button>
-                      <button onClick={() => setBatchDeleteConfirm(false)} className="px-2 py-1 bg-slate-200 dark:bg-slate-700 text-slate-700 rounded text-sm flex-shrink-0">取消</button>
-                    </div>
-                  ) : (
-                    selectedRecords.size > 0 && (
-                      <button onClick={() => setBatchDeleteConfirm(true)} className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 flex items-center gap-2 text-sm">
-                        <Trash2 className="w-4 h-4" />
-                        删除选中 ({selectedRecords.size})
-                      </button>
-                    )
-                  )}
-                </InlineActionKeeper>
+                {selectedRecords.size > 0 && (
+                  <button onClick={handleBatchDelete} className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 flex items-center gap-2 text-sm">
+                    <Trash2 className="w-4 h-4" />
+                    删除选中 ({selectedRecords.size})
+                  </button>
+                )}
                 
                 <button onClick={handleAdd} className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center gap-2 text-sm">
                   <Plus className="w-4 h-4" />
@@ -346,7 +336,7 @@ export default function DomainRecordsPage({ params }: { params: Promise<{ id: st
                       <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase min-w-[140px]">内容</th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase min-w-[80px]">TTL</th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase min-w-[80px]">状态</th>
-                      <th className="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase w-[160px] min-w-[160px] flex-shrink-0">操作</th>
+                      <th className="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase w-[220px] min-w-[220px] flex-shrink-0">操作</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
@@ -368,21 +358,10 @@ export default function DomainRecordsPage({ params }: { params: Promise<{ id: st
                             {record.isActive ? '活跃' : '禁用'}
                           </span>
                         </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-right text-sm w-[160px] min-w-[160px] flex-shrink-0">
+                        <td className="px-6 py-4 whitespace-nowrap text-right text-sm w-[220px] min-w-[220px] flex-shrink-0">
                           <div className="flex justify-end gap-2">
                             <button onClick={() => handleEdit(record)} className="text-blue-600 hover:text-blue-900 dark:text-blue-400">编辑</button>
-                            {/* 删除按钮 */}
-                            <InlineActionKeeper isConfirming={deleteConfirm === record.id} width="small">
-                              {deleteConfirm === record.id ? (
-                                <div className="flex items-center gap-1 bg-red-50 dark:bg-red-900/30 rounded px-2 py-1">
-                                  <span className="text-xs text-red-600">确认?</span>
-                                  <button onClick={() => handleDelete(record)} className="text-red-600"><CheckCircle className="w-4 h-4" /></button>
-                                  <button onClick={() => setDeleteConfirm(null)} className="text-slate-400"><X className="w-4 h-4" /></button>
-                                </div>
-                              ) : (
-                                <button onClick={() => setDeleteConfirm(record.id)} className="text-red-600 hover:text-red-900 dark:text-red-400">删除</button>
-                              )}
-                            </InlineActionKeeper>
+                            <button onClick={() => handleDelete(record)} className="text-red-600 hover:text-red-900 dark:text-red-400">删除</button>
                           </div>
                         </td>
                       </tr>
@@ -408,7 +387,7 @@ export default function DomainRecordsPage({ params }: { params: Promise<{ id: st
                 <h3 className="font-semibold text-slate-900 dark:text-white">操作记录</h3>
                 <button onClick={() => setOperationLogs([])} className="text-xs text-slate-500 hover:text-slate-700">清空</button>
               </div>
-              <div className="overflow-y-auto p-3 space-y-2 max-h-[400px] lg:max-h-[calc(100vh-300px)]">
+              <div className="overflow-y-auto p-3 space-y-2 max-h-[400px] lg:max-h-[calc(100dvh-300px)]">
                 {operationLogs.length === 0 ? (
                   <p className="text-center text-slate-400 text-sm py-8">暂无操作记录</p>
                 ) : (
@@ -471,7 +450,7 @@ export default function DomainRecordsPage({ params }: { params: Promise<{ id: st
       {/* 添加/编辑对话框 */}
       {showModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="bg-white dark:bg-slate-800 rounded-lg shadow-xl max-w-md w-full p-6 max-h-[90dvh] overflow-y-auto">
+          <div className="bg-white dark:bg-slate-800 rounded-lg shadow-xl max-w-md w-full p-6 max-h-[85dvh] overflow-y-auto">
             <h2 className="text-xl font-semibold text-slate-900 dark:text-white mb-4">{editingRecord ? '编辑记录' : '添加记录'}</h2>
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>

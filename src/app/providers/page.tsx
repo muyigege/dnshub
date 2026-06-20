@@ -1,8 +1,8 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { AlertTriangle, Trash2, CheckCircle, X, Edit2, Plus, Database } from 'lucide-react';
-import { ResponsiveContainer, ResponsiveGrid, InlineActionKeeper } from '@/components/ui/responsive-container';
+import { AlertTriangle, Trash2, Edit2, Plus, Database } from 'lucide-react';
+import { ResponsiveContainer, ResponsiveGrid } from '@/components/ui/responsive-container';
 import { useToast } from '@/components/ui/toast';
 import { useI18n } from '@/lib/i18n/context';
 
@@ -24,8 +24,6 @@ export default function ProvidersPage() {
   const [editingProvider, setEditingProvider] = useState<Provider | null>(null);
   const [testingProviderId, setTestingProviderId] = useState<number | null>(null);
   const [testResult, setTestResult] = useState<{ id: number; success: boolean; message: string } | null>(null);
-  const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null);
-  const [clearConfirm, setClearConfirm] = useState(false);
   const [decryptFailedConfirm, setDecryptFailedConfirm] = useState(false);
 
   const [formData, setFormData] = useState({
@@ -111,7 +109,8 @@ export default function ProvidersPage() {
   };
 
   const handleDelete = async (id: number) => {
-    setDeleteConfirm(null);
+    if (!window.confirm('确定删除此服务商吗？相关域名和记录也会一起删除。')) return;
+
     try {
       const response = await fetch(`/api/providers/${id}`, { method: 'DELETE' });
       const result = await response.json();
@@ -149,7 +148,6 @@ export default function ProvidersPage() {
   };
 
   const handleClearAll = async () => {
-    setClearConfirm(false);
     try {
       const response = await fetch('/api/providers/clear', { method: 'POST' });
       const result = await response.json();
@@ -159,6 +157,11 @@ export default function ProvidersPage() {
     } catch (error) {
       console.error('Failed to clear providers:', error);
     }
+  };
+
+  const handleClearAllClick = async () => {
+    if (!window.confirm('确定清空所有服务商数据吗？此操作不可恢复。')) return;
+    await handleClearAll();
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -255,25 +258,13 @@ export default function ProvidersPage() {
             {t('providers.add')}
           </button>
           
-          {/* 清空数据按钮 */}
-          <div className="flex-shrink-0 w-48">
-            {clearConfirm ? (
-              <div className="flex items-center gap-2 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-lg px-3 py-2">
-                <AlertTriangle className="h-4 w-4 text-red-600 flex-shrink-0" />
-                <span className="text-sm text-red-700 dark:text-red-300 whitespace-nowrap">{t('common.confirmDelete')}</span>
-                <button onClick={handleClearAll} className="px-2 py-1 bg-red-600 text-white rounded hover:bg-red-700 text-sm flex-shrink-0">{t('common.confirm')}</button>
-                <button onClick={() => setClearConfirm(false)} className="px-2 py-1 bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-300 text-sm flex-shrink-0">{t('common.cancel')}</button>
-              </div>
-            ) : (
-              <button
-                onClick={() => setClearConfirm(true)}
-                className="w-full px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors flex items-center gap-2 justify-center"
-              >
-                <Database className="h-4 w-4" />
-                {t('common.clearAll')}
-              </button>
-            )}
-          </div>
+          <button
+            onClick={handleClearAllClick}
+            className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors flex items-center gap-2 justify-center"
+          >
+            <Database className="h-4 w-4" />
+            {t('common.clearAll')}
+          </button>
           
           {/* 右侧空间占位 */}
           <div className="flex-1"></div>
@@ -307,29 +298,14 @@ export default function ProvidersPage() {
                     </span>
                   </div>
                   
-                  {/* 操作按钮 - 使用 InlineActionKeeper */}
-                  <InlineActionKeeper isConfirming={deleteConfirm === provider.id} width="small">
-                    {deleteConfirm === provider.id ? (
-                      <div className="flex items-center gap-1 bg-red-50 dark:bg-red-900/30 rounded px-2 py-1">
-                        <span className="text-xs text-red-600 dark:text-red-400">确认?</span>
-                        <button onClick={() => handleDelete(provider.id)} className="text-red-600 hover:text-red-800">
-                          <CheckCircle className="h-4 w-4" />
-                        </button>
-                        <button onClick={() => setDeleteConfirm(null)} className="text-gray-400 hover:text-gray-600">
-                          <X className="h-4 w-4" />
-                        </button>
-                      </div>
-                    ) : (
-                      <div className="flex gap-2">
-                        <button onClick={() => handleEdit(provider)} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
-                          <Edit2 className="h-4 w-4" />
-                        </button>
-                        <button onClick={() => setDeleteConfirm(provider.id)} className="text-gray-400 hover:text-red-600 dark:hover:text-red-400">
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      </div>
-                    )}
-                  </InlineActionKeeper>
+                  <div className="flex flex-shrink-0 gap-2">
+                    <button onClick={() => handleEdit(provider)} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
+                      <Edit2 className="h-4 w-4" />
+                    </button>
+                    <button onClick={() => handleDelete(provider.id)} className="text-gray-400 hover:text-red-600 dark:hover:text-red-400">
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
                 </div>
 
                 <div className="space-y-2 text-sm text-gray-600 dark:text-gray-400">
@@ -402,7 +378,7 @@ export default function ProvidersPage() {
       {/* Modal */}
       {showModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white dark:bg-gray-800 rounded-lg max-w-md w-full p-6 max-h-[90dvh] overflow-y-auto">
+          <div className="bg-white dark:bg-gray-800 rounded-lg max-w-md w-full p-6 max-h-[85dvh] overflow-y-auto">
             <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-6">
               {editingProvider ? '重新设置凭证' : '添加服务商'}
             </h2>

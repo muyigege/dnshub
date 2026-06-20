@@ -2,8 +2,8 @@
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { RefreshCw, AlertTriangle, Trash2, CheckCircle, X, Plus, Search, Filter, Globe } from 'lucide-react';
-import { ResponsiveContainer, ResponsiveTable, InlineActionKeeper } from '@/components/ui/responsive-container';
+import { RefreshCw, Trash2, Plus, Search, Filter, Globe } from 'lucide-react';
+import { ResponsiveContainer, ResponsiveTable } from '@/components/ui/responsive-container';
 import { useToast } from '@/components/ui/toast';
 import { useI18n } from '@/lib/i18n/context';
 
@@ -16,8 +16,7 @@ export default function DomainsPage() {
   const [searchTerm, setSearchTerm] = useState('');
   const [providerFilter, setProviderFilter] = useState<number | 'all'>('all');
   const [showAddModal, setShowAddModal] = useState(false);
-  const [syncConfirm, setSyncConfirm] = useState<number | null>(null);
-  const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null);
+  const [syncingAll, setSyncingAll] = useState(false);
   const [addFormData, setAddFormData] = useState({ providerId: '', domainName: '' });
   const toast = useToast();
 
@@ -42,7 +41,6 @@ export default function DomainsPage() {
   };
 
   const handleSync = async (providerId: number) => {
-    setSyncConfirm(null);
     setSyncing(providerId);
     try {
       const response = await fetch('/api/domains/sync', {
@@ -61,6 +59,22 @@ export default function DomainsPage() {
       toast.error('同步失败', 'Sync failed');
     } finally {
       setSyncing(null);
+    }
+  };
+
+  const handleSyncAll = async () => {
+    if (providers.length === 0) {
+      toast.warning(t('errors.providerNotFound'), 'Please add a provider first');
+      return;
+    }
+
+    setSyncingAll(true);
+    try {
+      for (const provider of providers) {
+        await handleSync(provider.id);
+      }
+    } finally {
+      setSyncingAll(false);
     }
   };
 
@@ -96,7 +110,8 @@ export default function DomainsPage() {
   };
 
   const handleDeleteDomain = async (id: number) => {
-    setDeleteConfirm(null);
+    if (!window.confirm('确定删除此域名吗？相关记录也会一起删除。')) return;
+
     try {
       const response = await fetch(`/api/domains/${id}`, { method: 'DELETE' });
       const result = await response.json();
@@ -169,31 +184,14 @@ export default function DomainsPage() {
                 {providers.map((p) => (<option key={p.id} value={p.id}>{p.name}</option>))}
               </select>
             </div>
-            {/* Sync All Button */}
-            <InlineActionKeeper isConfirming={syncConfirm === -1} width="large">
-              {syncConfirm === -1 ? (
-                <div className="flex items-center gap-2 bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-800 rounded-lg px-3 py-2">
-                  <AlertTriangle className="h-4 w-4 text-green-600 flex-shrink-0" />
-                  <span className="text-sm text-green-700 dark:text-green-300 whitespace-nowrap">确认同步 {providers.length} 个服务商?</span>
-                  <button onClick={() => providers.forEach((p) => handleSync(p.id))} className="px-2 py-1 bg-green-600 text-white rounded hover:bg-green-700 text-sm flex-shrink-0">确认</button>
-                  <button onClick={() => setSyncConfirm(null)} className="px-2 py-1 bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-300 text-sm flex-shrink-0">取消</button>
-                </div>
-              ) : (
-                <button
-                  onClick={() => {
-                    if (providers.length === 0) {
-                      toast.warning(t('errors.providerNotFound'), 'Please add a provider first');
-                      return;
-                    }
-                    setSyncConfirm(-1);
-                  }}
-                  className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors flex items-center gap-2 whitespace-nowrap"
-                >
-                  <RefreshCw className="h-5 w-5" />
-                  {t('common.sync')} {t('domains.title')}
-                </button>
-              )}
-            </InlineActionKeeper>
+            <button
+              onClick={handleSyncAll}
+              disabled={syncingAll}
+              className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors flex items-center justify-center gap-2 whitespace-nowrap disabled:opacity-50"
+            >
+              <RefreshCw className={`h-5 w-5 ${syncingAll ? 'animate-spin' : ''}`} />
+              {syncingAll ? '同步中...' : `${t('common.sync')} ${t('domains.title')}`}
+            </button>
           </div>
         </div>
 
@@ -222,7 +220,7 @@ export default function DomainsPage() {
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase min-w-[100px]">{t('common.type')}</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase min-w-[140px]">{t('logs.time')}</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase min-w-[80px]">{t('common.status')}</th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase w-40 min-w-[160px] flex-shrink-0">{t('common.actions')}</th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase w-[260px] min-w-[260px] flex-shrink-0">{t('common.actions')}</th>
                 </tr>
               </thead>
               <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
@@ -247,47 +245,17 @@ export default function DomainsPage() {
                         {domain.isActive ? '活跃' : '禁用'}
                       </span>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium w-40 min-w-[160px] flex-shrink-0">
+                    <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium w-[260px] min-w-[260px] flex-shrink-0">
                       <div className="flex items-center justify-end gap-2">
-                        {/* Sync Button */}
-                        <InlineActionKeeper isConfirming={syncConfirm === domain.providerId} width="small">
-                          {syncConfirm === domain.providerId ? (
-                            <div className="flex items-center gap-1 bg-green-50 dark:bg-green-900/30 rounded px-2 py-1">
-                              <span className="text-xs text-green-600">确认?</span>
-                              <button onClick={() => handleSync(domain.providerId)} disabled={syncing === domain.providerId} className="text-green-600 hover:text-green-800">
-                                <CheckCircle className="h-4 w-4" />
-                              </button>
-                              <button onClick={() => setSyncConfirm(null)} className="text-gray-400 hover:text-gray-600">
-                                <X className="h-4 w-4" />
-                              </button>
-                            </div>
-                          ) : (
-                            <button onClick={() => setSyncConfirm(domain.providerId)} disabled={syncing === domain.providerId} className="text-blue-600 hover:text-blue-900 dark:text-blue-400 disabled:opacity-50">
-                              {syncing === domain.providerId ? '同步中...' : '同步'}
-                            </button>
-                          )}
-                        </InlineActionKeeper>
+                        <button onClick={() => handleSync(domain.providerId)} disabled={syncing === domain.providerId} className="text-blue-600 hover:text-blue-900 dark:text-blue-400 disabled:opacity-50">
+                          {syncing === domain.providerId ? '同步中...' : '同步'}
+                        </button>
                         
                         <Link href={`/domains/${domain.id}`} className="text-gray-600 hover:text-gray-900 dark:text-gray-400 whitespace-nowrap">查看记录</Link>
                         
-                        {/* Delete Button */}
-                        <InlineActionKeeper isConfirming={deleteConfirm === domain.id} width="small">
-                          {deleteConfirm === domain.id ? (
-                            <div className="flex items-center gap-1 bg-red-50 dark:bg-red-900/30 rounded px-2 py-1">
-                              <span className="text-xs text-red-600">确认?</span>
-                              <button onClick={() => handleDeleteDomain(domain.id)} className="text-red-600 hover:text-red-800">
-                                <CheckCircle className="h-4 w-4" />
-                              </button>
-                              <button onClick={() => setDeleteConfirm(null)} className="text-gray-400 hover:text-gray-600">
-                                <X className="h-4 w-4" />
-                              </button>
-                            </div>
-                          ) : (
-                            <button onClick={() => setDeleteConfirm(domain.id)} className="text-red-600 hover:text-red-900 dark:text-red-400">
-                              <Trash2 className="h-4 w-4" />
-                            </button>
-                          )}
-                        </InlineActionKeeper>
+                        <button onClick={() => handleDeleteDomain(domain.id)} className="text-red-600 hover:text-red-900 dark:text-red-400">
+                          <Trash2 className="h-4 w-4" />
+                        </button>
                       </div>
                     </td>
                   </tr>
@@ -308,7 +276,7 @@ export default function DomainsPage() {
       {/* Add Domain Modal */}
       {showAddModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white dark:bg-gray-800 rounded-lg max-w-md w-full p-6 max-h-[90dvh] overflow-y-auto">
+          <div className="bg-white dark:bg-gray-800 rounded-lg max-w-md w-full p-6 max-h-[85dvh] overflow-y-auto">
             <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-6">手动添加域名</h2>
             <form onSubmit={handleAddDomain} className="space-y-4">
               <div>
