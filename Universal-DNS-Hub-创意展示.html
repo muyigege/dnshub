@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Universal DNS Hub - 多云DNS域名统一管理系统</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'PingFang SC', 'Microsoft YaHei', sans-serif; background: #0f172a; color: #e2e8f0; line-height: 1.6; }
+    .container { max-width: 1100px; margin: 0 auto; padding: 0 24px; }
+
+    /* Hero */
+    .hero { position: relative; padding: 80px 0 60px; text-align: center; overflow: hidden; }
+    .hero::before { content: ''; position: absolute; top: -50%; left: -50%; width: 200%; height: 200%; background: radial-gradient(circle at 30% 40%, rgba(59,130,246,0.15) 0%, transparent 50%), radial-gradient(circle at 70% 60%, rgba(139,92,246,0.1) 0%, transparent 50%); animation: pulse 8s ease-in-out infinite; }
+    @keyframes pulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.05); } }
+    .hero-badge { display: inline-flex; align-items: center; gap: 8px; background: rgba(59,130,246,0.15); border: 1px solid rgba(59,130,246,0.3); border-radius: 999px; padding: 6px 18px; font-size: 14px; color: #60a5fa; margin-bottom: 24px; position: relative; }
+    .hero h1 { font-size: 48px; font-weight: 800; background: linear-gradient(135deg, #60a5fa, #a78bfa, #f472b6); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin-bottom: 16px; position: relative; }
+    .hero p { font-size: 20px; color: #94a3b8; max-width: 700px; margin: 0 auto; position: relative; }
+
+    /* Stats */
+    .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin: -30px 0 60px; position: relative; z-index: 1; }
+    .stat-card { background: rgba(30,41,59,0.8); backdrop-filter: blur(12px); border: 1px solid rgba(148,163,184,0.1); border-radius: 16px; padding: 24px; text-align: center; transition: transform 0.2s, border-color 0.2s; }
+    .stat-card:hover { transform: translateY(-4px); border-color: rgba(59,130,246,0.4); }
+    .stat-icon { font-size: 32px; margin-bottom: 8px; }
+    .stat-num { font-size: 36px; font-weight: 800; color: #60a5fa; }
+    .stat-label { font-size: 14px; color: #94a3b8; margin-top: 4px; }
+
+    /* Section */
+    .section { margin-bottom: 60px; }
+    .section-title { font-size: 28px; font-weight: 700; margin-bottom: 8px; display: flex; align-items: center; gap: 12px; }
+    .section-title .icon { width: 36px; height: 36px; background: linear-gradient(135deg, #3b82f6, #8b5cf6); border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 18px; }
+    .section-desc { color: #94a3b8; font-size: 16px; margin-bottom: 28px; }
+
+    /* Pain Points */
+    .pain-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    .pain-card { background: rgba(30,41,59,0.6); border: 1px solid rgba(148,163,184,0.1); border-radius: 16px; padding: 28px; }
+    .pain-card.before { border-left: 3px solid #ef4444; }
+    .pain-card.after { border-left: 3px solid #22c55e; }
+    .pain-card h3 { font-size: 16px; font-weight: 600; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+    .pain-card.before h3 { color: #fca5a5; }
+    .pain-card.after h3 { color: #86efac; }
+    .pain-card ul { list-style: none; }
+    .pain-card li { padding: 6px 0; color: #cbd5e1; font-size: 14px; }
+    .pain-card li::before { content: ''; display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 10px; }
+    .pain-card.before li::before { background: #ef4444; }
+    .pain-card.after li::before { background: #22c55e; }
+
+    /* Features */
+    .feature-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+    .feature-card { background: rgba(30,41,59,0.6); border: 1px solid rgba(148,163,184,0.1); border-radius: 16px; padding: 28px; transition: transform 0.2s, border-color 0.2s; }
+    .feature-card:hover { transform: translateY(-4px); border-color: rgba(59,130,246,0.3); }
+    .feature-icon { font-size: 36px; margin-bottom: 16px; }
+    .feature-card h3 { font-size: 18px; font-weight: 600; margin-bottom: 8px; color: #f1f5f9; }
+    .feature-card p { font-size: 14px; color: #94a3b8; }
+
+    /* AI Demo */
+    .ai-demo { background: rgba(30,41,59,0.6); border: 1px solid rgba(148,163,184,0.1); border-radius: 20px; padding: 32px; }
+    .ai-input { display: flex; gap: 12px; margin-bottom: 24px; }
+    .ai-input input { flex: 1; background: rgba(15,23,42,0.8); border: 1px solid rgba(148,163,184,0.2); border-radius: 12px; padding: 14px 18px; color: #e2e8f0; font-size: 15px; outline: none; transition: border-color 0.2s; }
+    .ai-input input:focus { border-color: #3b82f6; }
+    .ai-input button { background: linear-gradient(135deg, #3b82f6, #8b5cf6); border: none; border-radius: 12px; padding: 14px 28px; color: white; font-size: 15px; font-weight: 600; cursor: pointer; transition: opacity 0.2s; }
+    .ai-input button:hover { opacity: 0.9; }
+    .ai-result { background: rgba(15,23,42,0.6); border-radius: 12px; padding: 20px; border: 1px solid rgba(148,163,184,0.1); }
+    .ai-result-header { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; font-weight: 600; color: #60a5fa; }
+    .ai-result-table { width: 100%; border-collapse: collapse; }
+    .ai-result-table th { text-align: left; padding: 8px 12px; font-size: 12px; color: #64748b; text-transform: uppercase; border-bottom: 1px solid rgba(148,163,184,0.1); }
+    .ai-result-table td { padding: 10px 12px; font-size: 14px; border-bottom: 1px solid rgba(148,163,184,0.05); }
+    .badge { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+    .badge-create { background: rgba(34,197,94,0.15); color: #4ade80; }
+    .badge-update { background: rgba(59,130,246,0.15); color: #60a5fa; }
+    .badge-delete { background: rgba(239,68,68,0.15); color: #f87171; }
+
+    /* Providers */
+    .provider-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+    .provider-card { background: rgba(30,41,59,0.6); border: 1px solid rgba(148,163,184,0.1); border-radius: 16px; padding: 24px; text-align: center; }
+    .provider-logo { font-size: 40px; margin-bottom: 12px; }
+    .provider-card h3 { font-size: 16px; font-weight: 600; margin-bottom: 6px; }
+    .provider-card p { font-size: 13px; color: #94a3b8; }
+
+    /* Tech Stack */
+    .tech-grid { display: flex; flex-wrap: wrap; gap: 12px; }
+    .tech-tag { background: rgba(59,130,246,0.1); border: 1px solid rgba(59,130,246,0.2); border-radius: 10px; padding: 8px 18px; font-size: 14px; color: #93c5fd; }
+
+    /* Value */
+    .value-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+    .value-card { background: rgba(30,41,59,0.6); border: 1px solid rgba(148,163,184,0.1); border-radius: 16px; padding: 28px; text-align: center; }
+    .value-icon { font-size: 40px; margin-bottom: 12px; }
+    .value-card h3 { font-size: 18px; font-weight: 600; margin-bottom: 8px; }
+    .value-card p { font-size: 14px; color: #94a3b8; }
+
+    /* Footer */
+    .footer { text-align: center; padding: 40px 0; border-top: 1px solid rgba(148,163,184,0.1); margin-top: 60px; }
+    .footer p { color: #64748b; font-size: 14px; }
+    .footer a { color: #60a5fa; text-decoration: none; }
+
+    @media (max-width: 768px) {
+      .hero h1 { font-size: 32px; }
+      .stats { grid-template-columns: repeat(2, 1fr); }
+      .feature-grid, .pain-grid, .value-grid, .provider-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Hero -->
+  <section class="hero">
+    <div class="container">
+      <div class="hero-badge">🌐 多云 DNS 管理平台</div>
+      <h1>Universal DNS Hub</h1>
+      <p>一站式管理 Cloudflare、阿里云、腾讯云 DNS，用 AI 自然语言操控解析记录，让域名管理从繁琐走向智能</p>
+    </div>
+  </section>
+
+  <!-- Stats -->
+  <div class="container">
+    <div class="stats">
+      <div class="stat-card">
+        <div class="stat-icon">☁️</div>
+        <div class="stat-num">3+</div>
+        <div class="stat-label">DNS 服务商</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon">🤖</div>
+        <div class="stat-num">AI</div>
+        <div class="stat-label">自然语言操控</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon">🔒</div>
+        <div class="stat-num">AES</div>
+        <div class="stat-label">256位加密存储</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon">🐳</div>
+        <div class="stat-num">1</div>
+        <div class="stat-label">命令部署</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 痛点对比 -->
+  <div class="container">
+    <section class="section">
+      <div class="section-title"><span class="icon">⚡</span> 痛点与解决方案</div>
+      <div class="section-desc">多云 DNS 管理的困境，我们一次解决</div>
+      <div class="pain-grid">
+        <div class="pain-card before">
+          <h3>❌ 没有 Universal DNS Hub 时</h3>
+          <ul>
+            <li>Cloudflare、阿里云、腾讯云各自有独立控制台，来回切换效率极低</li>
+            <li>批量修改 DNS 记录需要逐条手动操作，耗时且易出错</li>
+            <li>不同服务商的 API 接口各异，运维人员学习成本高</li>
+            <li>DNS 凭证散落在各处，缺乏统一加密管理和审计追踪</li>
+            <li>迁移域名时需要手动导出导入，跨服务商操作复杂</li>
+          </ul>
+        </div>
+        <div class="pain-card after">
+          <h3>✅ 有了 Universal DNS Hub 后</h3>
+          <ul>
+            <li>一个面板统管所有 DNS 服务商，无需切换控制台</li>
+            <li>AI 自然语言一键操作："给 example.com 加 A 记录指向 1.2.3.4"</li>
+            <li>统一 API 抽象层，屏蔽各服务商接口差异</li>
+            <li>AES-256 加密存储凭证，操作日志完整追踪</li>
+            <li>配置一键导出/导入，密码保护跨环境安全迁移</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- 核心功能 -->
+  <div class="container">
+    <section class="section">
+      <div class="section-title"><span class="icon">🚀</span> 核心功能</div>
+      <div class="section-desc">六大模块，覆盖 DNS 管理全链路</div>
+      <div class="feature-grid">
+        <div class="feature-card">
+          <div class="feature-icon">☁️</div>
+          <h3>多云服务商管理</h3>
+          <p>统一接入 Cloudflare、阿里云 DNS、腾讯云 DNSPod，支持 API Token / AccessKey 等多种认证方式，一键测试连接</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">🤖</div>
+          <h3>AI 智能调度</h3>
+          <p>用自然语言操控 DNS：说"把 mail 指向新服务器"，AI 自动解析意图、生成操作、确认执行，支持批量操作</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">📋</div>
+          <h3>域名与记录管理</h3>
+          <p>一键同步所有域名，搜索筛选、批量操作、手动添加，DNS 记录增删改查一目了然</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">🔒</div>
+          <h3>安全加密体系</h3>
+          <p>AES-256-GCM 加密存储所有 API 密钥，PBKDF2 密钥派生，加密密钥持久化，配置导出支持密码保护</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">📦</div>
+          <h3>配置备份迁移</h3>
+          <p>一键导出全量配置（含加密凭证），密码保护跨环境安全迁移，导入时自动完成密钥转换</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">🌍</div>
+          <h3>国际化与响应式</h3>
+          <p>中英文双语切换，暗色模式，全响应式布局，桌面端和移动端均有良好体验</p>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- AI Demo -->
+  <div class="container">
+    <section class="section">
+      <div class="section-title"><span class="icon">✨</span> AI 智能调度演示</div>
+      <div class="section-desc">用自然语言管理 DNS，告别手动操作</div>
+      <div class="ai-demo">
+        <div class="ai-input">
+          <input type="text" value="给 bmxdr.de 添加一条 A 记录指向 1.2.3.4，同时把 www 的 CNAME 指向 bmxdr.de" readonly />
+          <button>解析执行</button>
+        </div>
+        <div class="ai-result">
+          <div class="ai-result-header">🤖 AI 解析结果</div>
+          <table class="ai-result-table">
+            <thead>
+              <tr><th>操作</th><th>类型</th><th>名称</th><th>内容</th><th>状态</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><span class="badge badge-create">新增</span></td>
+                <td>A</td>
+                <td>bmxdr.de</td>
+                <td>1.2.3.4</td>
+                <td>✅ 已执行</td>
+              </tr>
+              <tr>
+                <td><span class="badge badge-update">更新</span></td>
+                <td>CNAME</td>
+                <td>www.bmxdr.de</td>
+                <td>bmxdr.de</td>
+                <td>✅ 已执行</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- 支持的服务商 -->
+  <div class="container">
+    <section class="section">
+      <div class="section-title"><span class="icon">🌐</span> 支持的 DNS 服务商</div>
+      <div class="section-desc">主流云服务商全覆盖，持续扩展中</div>
+      <div class="provider-grid">
+        <div class="provider-card">
+          <div class="provider-logo">🟠</div>
+          <h3>Cloudflare</h3>
+          <p>全球最大 DNS 托管商<br/>支持 API Token / Global API Key</p>
+        </div>
+        <div class="provider-card">
+          <div class="provider-logo">🟡</div>
+          <h3>阿里云 DNS</h3>
+          <p>国内最大域名服务商<br/>AccessKey ID + Secret 认证</p>
+        </div>
+        <div class="provider-card">
+          <div class="provider-logo">🟢</div>
+          <h3>腾讯云 DNSPod</h3>
+          <p>国内第二大 DNS 服务<br/>Secret ID + Key 认证</p>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- 价值与意义 -->
+  <div class="container">
+    <section class="section">
+      <div class="section-title"><span class="icon">💎</span> 价值与意义</div>
+      <div class="section-desc">从效率、安全、成本三个维度创造价值</div>
+      <div class="value-grid">
+        <div class="value-card">
+          <div class="value-icon">⚡</div>
+          <h3>效率提升</h3>
+          <p>AI 自然语言操控将 DNS 操作时间从分钟级缩短到秒级，批量操作一键完成，运维效率提升 10 倍以上</p>
+        </div>
+        <div class="value-card">
+          <div class="value-icon">🔒</div>
+          <h3>安全合规</h3>
+          <p>AES-256 加密存储凭证，操作日志完整审计，配置迁移密码保护，满足企业安全合规要求</p>
+        </div>
+        <div class="value-card">
+          <div class="value-icon">💰</div>
+          <h3>降低成本</h3>
+          <p>开源免费自部署，Docker 一键运行，无需购买商业 DNS 管理平台，中小企业零成本上手</p>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- 技术栈 -->
+  <div class="container">
+    <section class="section">
+      <div class="section-title"><span class="icon">🛠️</span> 技术栈</div>
+      <div class="section-desc">现代化全栈技术，稳定可靠</div>
+      <div class="tech-grid">
+        <span class="tech-tag">Next.js 16</span>
+        <span class="tech-tag">React 19</span>
+        <span class="tech-tag">TypeScript</span>
+        <span class="tech-tag">Tailwind CSS 4</span>
+        <span class="tech-tag">Drizzle ORM</span>
+        <span class="tech-tag">SQLite (libsql)</span>
+        <span class="tech-tag">AES-256-GCM</span>
+        <span class="tech-tag">PBKDF2</span>
+        <span class="tech-tag">Docker</span>
+        <span class="tech-tag">Zod</span>
+      </div>
+    </section>
+  </div>
+
+  <!-- Footer -->
+  <div class="footer">
+    <div class="container">
+      <p>Universal DNS Hub · 开源多云 DNS 管理平台 · <a href="https://github.com/muyigege/dnshub">GitHub</a></p>
+      <p style="margin-top: 8px; font-size: 12px; color: #475569;">由 TRAE 辅助开发 · 2026</p>
+    </div>
+  </div>
+
+</body>
+</html>

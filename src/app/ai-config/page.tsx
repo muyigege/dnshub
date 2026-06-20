@@ -1,7 +1,17 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { Plus, Trash2, Edit2, Loader2, CheckCircle, XCircle, ExternalLink, Sparkles } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import {
+  CheckCircle,
+  Edit2,
+  ExternalLink,
+  KeyRound,
+  Loader2,
+  Plus,
+  Sparkles,
+  Trash2,
+  XCircle,
+} from 'lucide-react';
 import { useToast } from '@/components/ui/toast';
 import { ResponsiveContainer } from '@/components/ui/responsive-container';
 
@@ -12,17 +22,88 @@ type AIConfig = {
   apiUrl: string;
   modelId: string;
   apiKey: string;
+  apiKeyStatus?: 'ok' | 'missing' | 'invalid';
+  apiKeyError?: string;
   isActive: boolean;
   createdAt: string;
   updatedAt: string;
 };
 
-const PRESET_TEMPLATES = {
-  deepseek_v3: { name: 'DeepSeek-V3', providerType: 'siliconflow', apiUrl: 'https://api.siliconflow.cn/v1/chat/completions', modelId: 'deepseek-ai/DeepSeek-V3' },
-  qwen3_32b: { name: '通义千问 Qwen3-32B', providerType: 'siliconflow', apiUrl: 'https://api.siliconflow.cn/v1/chat/completions', modelId: 'Qwen/Qwen3-32B' },
-  qwen3_coder: { name: '通义千问 Qwen3-Coder', providerType: 'siliconflow', apiUrl: 'https://api.siliconflow.cn/v1/chat/completions', modelId: 'Qwen/Qwen3-Coder-30B-A3B-Instruct' },
-  qwen25_72b: { name: '通义千问 Qwen2.5-72B', providerType: 'siliconflow', apiUrl: 'https://api.siliconflow.cn/v1/chat/completions', modelId: 'Qwen/Qwen2.5-72B-Instruct' },
+type ApiResult<T> = {
+  success: boolean;
+  data?: T;
+  error?: string;
+  message?: string;
+  messageCn?: string;
+  messageEn?: string;
+  decryptionWarnings?: Array<{ id: number; name: string; message?: string }>;
 };
+
+const PRESET_TEMPLATES = {
+  deepseek_v3: {
+    name: 'DeepSeek-V3',
+    providerType: 'siliconflow',
+    apiUrl: 'https://api.siliconflow.cn/v1/chat/completions',
+    modelId: 'deepseek-ai/DeepSeek-V3',
+  },
+  qwen3_32b: {
+    name: '通义千问 Qwen3-32B',
+    providerType: 'siliconflow',
+    apiUrl: 'https://api.siliconflow.cn/v1/chat/completions',
+    modelId: 'Qwen/Qwen3-32B',
+  },
+  qwen3_coder: {
+    name: '通义千问 Qwen3-Coder',
+    providerType: 'siliconflow',
+    apiUrl: 'https://api.siliconflow.cn/v1/chat/completions',
+    modelId: 'Qwen/Qwen3-Coder-30B-A3B-Instruct',
+  },
+  qwen25_72b: {
+    name: '通义千问 Qwen2.5-72B',
+    providerType: 'siliconflow',
+    apiUrl: 'https://api.siliconflow.cn/v1/chat/completions',
+    modelId: 'Qwen/Qwen2.5-72B-Instruct',
+  },
+};
+
+const emptyForm = {
+  name: '',
+  providerType: 'custom',
+  apiUrl: '',
+  modelId: '',
+  apiKey: '',
+};
+
+async function readApiJson<T>(response: Response): Promise<ApiResult<T>> {
+  const contentType = response.headers.get('content-type') || '';
+
+  if (!contentType.includes('application/json')) {
+    const text = await response.text();
+    const messageCn =
+      response.status === 404
+        ? '接口返回 404：当前运行的服务未加载最新 API，请重新构建并重启容器'
+        : text.slice(0, 180) || `请求失败（${response.status}）`;
+    return {
+      success: false,
+      error: messageCn,
+      messageCn,
+      messageEn:
+        response.status === 404
+          ? 'API returned 404. Rebuild and restart the running container.'
+          : `Request failed (${response.status})`,
+    };
+  }
+
+  return response.json();
+}
+
+function resultMessage<T>(result: ApiResult<T>, fallback: string) {
+  return result.messageCn || result.error || result.message || fallback;
+}
+
+function errorMessage(error: unknown, fallback: string) {
+  return error instanceof Error ? error.message : fallback;
+}
 
 export default function AIConfigPage() {
   const toast = useToast();
@@ -31,28 +112,57 @@ export default function AIConfigPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingConfig, setEditingConfig] = useState<AIConfig | null>(null);
   const [testing, setTesting] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [togglingId, setTogglingId] = useState<number | null>(null);
   const [testResult, setTestResult] = useState<{ success: boolean; message?: string } | null>(null);
-  const [formData, setFormData] = useState({ name: '', providerType: 'custom', apiUrl: '', modelId: '', apiKey: '' });
+  const [formData, setFormData] = useState(emptyForm);
 
-  useEffect(() => { loadConfigs(); }, []);
-
-  const loadConfigs = async () => {
+  const loadConfigs = async (silent = false) => {
     try {
       setLoading(true);
-      const response = await fetch('/api/ai-config');
-      const result = await response.json();
-      if (result.success && result.data) setConfigs(result.data);
-      else toast.error('加载配置失败', 'Failed to load configs');
+      const response = await fetch('/api/ai-config', { cache: 'no-store' });
+      const result = await readApiJson<AIConfig[]>(response);
+
+      if (!response.ok || !result.success || !result.data) {
+        throw new Error(resultMessage(result, '加载配置失败'));
+      }
+
+      setConfigs(result.data);
+
+      if (!silent && result.decryptionWarnings && result.decryptionWarnings.length > 0) {
+        toast.warning(
+          `${result.decryptionWarnings.length} 个配置的 API Key 无法解密，请重新填写`,
+          `${result.decryptionWarnings.length} config API keys need to be re-entered`
+        );
+      }
+
+      return true;
     } catch (error) {
-      toast.error('加载配置失败，请检查网络连接', 'Failed to load configs, check network');
+      if (!silent) {
+        toast.error(errorMessage(error, '加载配置失败'), 'Failed to load configs');
+      }
+      return false;
     } finally {
       setLoading(false);
     }
   };
 
+  useEffect(() => {
+    loadConfigs();
+  }, []);
+
+  const resetForm = () => {
+    setEditingConfig(null);
+    setFormData(emptyForm);
+    setTestResult(null);
+  };
+
   const handlePresetSelect = (preset: keyof typeof PRESET_TEMPLATES) => {
     const template = PRESET_TEMPLATES[preset];
-    setFormData({ ...formData, name: template.name, providerType: template.providerType, apiUrl: template.apiUrl, modelId: template.modelId });
+    setEditingConfig(null);
+    setFormData({ ...emptyForm, ...template });
+    setTestResult(null);
     setDialogOpen(true);
   };
 
@@ -61,59 +171,104 @@ export default function AIConfigPage() {
       toast.warning('请填写所有必填字段', 'Please fill all required fields');
       return;
     }
+
+    setSaving(true);
     try {
       const response = editingConfig
-        ? await fetch(`/api/ai-config/${editingConfig.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(formData) })
-        : await fetch('/api/ai-config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(formData) });
-      const result = await response.json();
-      if (result.success) {
-        toast.success('配置保存成功', 'Config saved successfully');
-        await loadConfigs();
-        setDialogOpen(false);
-        setEditingConfig(null);
-        setFormData({ name: '', providerType: 'custom', apiUrl: '', modelId: '', apiKey: '' });
-        setTestResult(null);
-      } else {
-        toast.error('保存失败', 'Save failed');
+        ? await fetch(`/api/ai-config/${editingConfig.id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(formData),
+          })
+        : await fetch('/api/ai-config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(formData),
+          });
+
+      const result = await readApiJson<AIConfig>(response);
+      if (!response.ok || !result.success) {
+        toast.error(resultMessage(result, '保存失败'), result.messageEn || 'Save failed');
+        return;
       }
+
+      const refreshed = await loadConfigs(true);
+      if (refreshed) {
+        toast.success('配置保存成功', 'Config saved successfully');
+      } else {
+        toast.warning('配置已保存，但列表刷新失败，请重新打开页面', 'Config saved, but refresh failed');
+      }
+
+      setDialogOpen(false);
+      resetForm();
     } catch (error) {
-      toast.error('保存失败，请检查网络连接', 'Save failed, check network');
+      toast.error(errorMessage(error, '保存失败'), 'Save failed');
+    } finally {
+      setSaving(false);
     }
   };
 
   const handleEdit = (config: AIConfig) => {
     setEditingConfig(config);
-    setFormData({ name: config.name, providerType: config.providerType, apiUrl: config.apiUrl, modelId: config.modelId, apiKey: config.apiKey });
+    setFormData({
+      name: config.name,
+      providerType: config.providerType,
+      apiUrl: config.apiUrl,
+      modelId: config.modelId,
+      apiKey: config.apiKeyStatus === 'ok' ? config.apiKey : '',
+    });
+    setTestResult(null);
     setDialogOpen(true);
   };
 
   const handleDelete = async (id: number) => {
     if (!window.confirm('确定删除此 AI 配置吗？')) return;
 
+    setDeletingId(id);
     try {
       const response = await fetch(`/api/ai-config/${id}`, { method: 'DELETE' });
-      const result = await response.json();
-      if (result.success) {
-        toast.success('配置删除成功', 'Config deleted successfully');
-        await loadConfigs();
+      const result = await readApiJson<unknown>(response);
+
+      if (!response.ok || !result.success) {
+        toast.error(resultMessage(result, '删除失败'), result.messageEn || 'Delete failed');
+        return;
       }
+
+      toast.success('配置删除成功', 'Config deleted successfully');
+      await loadConfigs(true);
     } catch (error) {
-      toast.error('删除失败', 'Delete failed');
+      toast.error(errorMessage(error, '删除失败'), 'Delete failed');
+    } finally {
+      setDeletingId(null);
     }
   };
 
-  const handleToggleActive = async (id: number, isActive: boolean) => {
+  const handleToggleActive = async (config: AIConfig) => {
+    if (config.apiKeyStatus && config.apiKeyStatus !== 'ok' && !config.isActive) {
+      toast.warning('请先编辑此配置并重新填写 API Key', 'Please re-enter the API Key before activating');
+      return;
+    }
+
+    setTogglingId(config.id);
     try {
-      const response = await fetch(`/api/ai-config/${id}/toggle`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ isActive }) });
-      const result = await response.json();
-      if (result.success) {
-        toast.success(isActive ? '配置已激活' : '配置已禁用', isActive ? 'Config activated' : 'Config deactivated');
-        await loadConfigs();
-      } else {
-        toast.error('切换失败', 'Toggle failed');
+      const response = await fetch(`/api/ai-config/${config.id}/toggle`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isActive: !config.isActive }),
+      });
+      const result = await readApiJson<AIConfig>(response);
+
+      if (!response.ok || !result.success) {
+        toast.error(resultMessage(result, '切换失败'), result.messageEn || 'Toggle failed');
+        return;
       }
+
+      toast.success(!config.isActive ? '配置已激活' : '配置已停用', !config.isActive ? 'Config activated' : 'Config deactivated');
+      await loadConfigs(true);
     } catch (error) {
-      toast.error('切换失败，请检查网络连接', 'Toggle failed, check network');
+      toast.error(errorMessage(error, '切换失败'), 'Toggle failed');
+    } finally {
+      setTogglingId(null);
     }
   };
 
@@ -122,193 +277,321 @@ export default function AIConfigPage() {
       toast.warning('请先填写 API URL、模型 ID 和 API Key', 'Please fill API URL, Model ID and API Key');
       return;
     }
+
     setTesting(true);
     setTestResult(null);
     try {
-      const response = await fetch('/api/ai-config/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ apiUrl: formData.apiUrl, modelId: formData.modelId, apiKey: formData.apiKey }) });
-      const result = await response.json();
-      setTesting(false);
-      setTestResult(result);
-      if (result.success) toast.success('连接测试成功', 'Connection test successful');
-      else toast.error('测试失败', 'Test failed');
+      const response = await fetch('/api/ai-config/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiUrl: formData.apiUrl, modelId: formData.modelId, apiKey: formData.apiKey }),
+      });
+      const result = await readApiJson<{ message?: string }>(response);
+      const message = result.message || result.error || result.messageCn;
+      setTestResult({ success: result.success, message });
+
+      if (result.success) {
+        toast.success('连接测试成功', 'Connection test successful');
+      } else {
+        toast.error(message || '测试失败', result.messageEn || 'Test failed');
+      }
     } catch (error) {
+      const message = errorMessage(error, '测试失败，请检查网络连接');
+      setTestResult({ success: false, message });
+      toast.error(message, 'Test failed');
+    } finally {
       setTesting(false);
-      setTestResult({ success: false, message: '测试失败，请检查网络连接' });
-      toast.error('测试失败，请检查网络连接', 'Test failed, check network');
     }
   };
 
-  const resetForm = () => {
-    setEditingConfig(null);
-    setFormData({ name: '', providerType: 'custom', apiUrl: '', modelId: '', apiKey: '' });
-    setTestResult(null);
-  };
-
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-950 dark:to-slate-900">
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-950">
       <ResponsiveContainer>
-      <div className="py-6 sm:py-8">
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold text-slate-900 dark:text-slate-50 mb-2 flex items-center gap-2">
-            <Sparkles className="w-8 h-8 text-purple-600" />
-            大模型配置
-          </h1>
-          <p className="text-slate-600 dark:text-slate-400">配置自定义大模型 API，支持 OpenAI 和硅基流动等兼容 OpenAI 接口的服务商</p>
-        </div>
-
-        {/* 硅基流动引导卡片 */}
-        <div className="bg-gradient-to-r from-purple-50 to-pink-50 dark:from-purple-950/20 dark:to-pink-950/20 border border-purple-200 dark:border-purple-800 rounded-lg p-6 mb-6">
-          <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-            <div>
-              <h3 className="text-lg font-semibold mb-2 flex items-center gap-2 text-slate-900 dark:text-slate-50"><Sparkles className="w-5 h-5 text-purple-600" />推荐使用硅基流动</h3>
-              <p className="text-sm text-slate-600 dark:text-slate-400">兼容 OpenAI 接口，支持 Qwen/DeepSeek 等开源大模型，注册即送额度</p>
+        <div className="py-6 sm:py-8">
+          <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+            <div className="min-w-0">
+              <h1 className="flex items-center gap-2 text-2xl font-bold text-slate-900 dark:text-slate-50 sm:text-3xl">
+                <Sparkles className="h-7 w-7 text-blue-600" />
+                大模型配置
+              </h1>
+              <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">
+                配置 OpenAI 兼容接口，用于自然语言 DNS 调度。
+              </p>
             </div>
-            <button onClick={() => window.open('https://cloud.siliconflow.cn/i/8UoNCRqs', '_blank')} className="w-full md:w-auto bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center justify-center gap-2 transition-colors">
-              <ExternalLink className="w-4 h-4" />
-              注册硅基流动（免费额度）
-            </button>
-          </div>
-        </div>
-
-        {/* 预设模板卡片 */}
-        <div className="bg-white dark:bg-slate-800 rounded-lg p-6 shadow-sm border border-slate-200 dark:border-slate-700 mb-6">
-          <h3 className="text-lg font-semibold mb-2 text-slate-900 dark:text-slate-50">快速开始</h3>
-          <p className="text-sm text-slate-600 dark:text-slate-400 mb-4">选择预设模板快速创建配置</p>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            <button onClick={() => handlePresetSelect('deepseek_v3')} className="border border-slate-200 dark:border-slate-700 rounded-lg p-4 text-left hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors">
-              <div className="font-semibold mb-1 text-slate-900 dark:text-slate-50">DeepSeek-V3</div>
-              <div className="text-sm text-slate-500">高性价比推理模型</div>
-            </button>
-            <button onClick={() => handlePresetSelect('qwen3_32b')} className="border border-slate-200 dark:border-slate-700 rounded-lg p-4 text-left hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors">
-              <div className="font-semibold mb-1 text-slate-900 dark:text-slate-50">通义千问 Qwen3-32B</div>
-              <div className="text-sm text-slate-500">阿里开源旗舰模型</div>
-            </button>
-            <button onClick={() => handlePresetSelect('qwen3_coder')} className="border border-slate-200 dark:border-slate-700 rounded-lg p-4 text-left hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors">
-              <div className="font-semibold mb-1 text-slate-900 dark:text-slate-50">Qwen3-Coder</div>
-              <div className="text-sm text-slate-500">代码专用模型</div>
-            </button>
-            <button onClick={() => handlePresetSelect('qwen25_72b')} className="border border-slate-200 dark:border-slate-700 rounded-lg p-4 text-left hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors">
-              <div className="font-semibold mb-1 text-slate-900 dark:text-slate-50">Qwen2.5-72B</div>
-              <div className="text-sm text-slate-500">超大规模推理</div>
-            </button>
-          </div>
-        </div>
-
-        {/* 配置列表 */}
-        <div className="bg-white dark:bg-slate-800 rounded-lg shadow-sm border border-slate-200 dark:border-slate-700">
-          <div className="p-6 border-b border-slate-200 dark:border-slate-700 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-50">配置列表</h3>
-              <p className="text-sm text-slate-600 dark:text-slate-400">管理所有大模型配置</p>
-            </div>
-            <button onClick={() => { resetForm(); setDialogOpen(true); }} className="w-full sm:w-auto bg-slate-900 hover:bg-slate-800 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center justify-center gap-2 transition-colors dark:bg-slate-700 dark:hover:bg-slate-600">
-              <Plus className="w-4 h-4" />
+            <button
+              onClick={() => {
+                resetForm();
+                setDialogOpen(true);
+              }}
+              className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-slate-800 sm:w-auto dark:bg-slate-700 dark:hover:bg-slate-600"
+            >
+              <Plus className="h-4 w-4" />
               添加配置
             </button>
           </div>
 
-          <div className="p-6">
-            {loading ? (
-              <div className="text-center py-8 text-slate-500">加载中...</div>
-            ) : configs.length === 0 ? (
-              <div className="text-center py-8 text-slate-500">暂无配置，点击右上角添加配置</div>
-            ) : (
-              <div className="space-y-4">
-                {configs.map(config => (
-                  <div key={config.id} className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between p-4 rounded-lg border bg-slate-50 dark:bg-slate-900 border-slate-200 dark:border-slate-700">
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-2 mb-1">
-                        <span className="font-semibold text-slate-900 dark:text-slate-50">{config.name}</span>
-                        {config.isActive ? (
-                          <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300">已激活</span>
-                        ) : (
-                          <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-slate-100 text-slate-800 dark:bg-slate-700 dark:text-slate-300">未激活</span>
-                        )}
-                        <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-slate-100 text-slate-800 dark:bg-slate-700 dark:text-slate-300">{config.providerType}</span>
-                      </div>
-                      <div className="text-sm text-slate-500 space-y-1">
-                        <div>模型: {config.modelId}</div>
-                        <div className="truncate">{config.apiUrl}</div>
-                      </div>
-                    </div>
-                    <div className="flex w-full flex-shrink-0 items-center justify-end gap-2 sm:w-auto">
-                      <button onClick={() => handleToggleActive(config.id, !config.isActive)} className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${config.isActive ? 'bg-purple-600' : 'bg-slate-200 dark:bg-slate-700'}`}>
-                        <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${config.isActive ? 'translate-x-6' : 'translate-x-1'}`} />
-                      </button>
-                      <button onClick={() => handleEdit(config)} className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors">
-                        <Edit2 className="w-4 h-4 text-slate-600 dark:text-slate-400" />
-                      </button>
-                      <button onClick={() => handleDelete(config.id)} className="p-2 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"><Trash2 className="w-4 h-4 text-red-500" /></button>
-                    </div>
-                  </div>
-                ))}
+          <div className="mb-6 rounded-lg border border-blue-200 bg-blue-50 p-5 dark:border-blue-900 dark:bg-blue-950/30">
+            <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+              <div className="min-w-0">
+                <h2 className="flex items-center gap-2 text-base font-semibold text-slate-900 dark:text-slate-50">
+                  <Sparkles className="h-5 w-5 text-blue-600" />
+                  推荐使用硅基流动
+                </h2>
+                <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
+                  兼容 OpenAI 接口，支持 Qwen、DeepSeek 等模型。
+                </p>
               </div>
-            )}
-          </div>
-        </div>
-
-        {/* 添加/编辑对话框 */}
-        {dialogOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-            <div className="bg-white dark:bg-slate-800 rounded-lg shadow-xl max-w-2xl w-full max-h-[85dvh] overflow-y-auto">
-              <div className="p-6 border-b border-slate-200 dark:border-slate-700">
-                <h2 className="text-xl font-semibold text-slate-900 dark:text-slate-50">{editingConfig ? '编辑配置' : '添加配置'}</h2>
-                <p className="text-sm text-slate-600 dark:text-slate-400 mt-1">配置大模型 API 连接信息</p>
-              </div>
-
-              <div className="p-6 space-y-4">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <div>
-                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">配置名称</label>
-                    <input type="text" value={formData.name} onChange={e => setFormData({ ...formData, name: e.target.value })} placeholder="如：OpenAI GPT-4" className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-50 focus:ring-2 focus:ring-purple-500 focus:border-transparent" />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">服务商类型</label>
-                    <select value={formData.providerType} onChange={e => setFormData({ ...formData, providerType: e.target.value })} className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-50 focus:ring-2 focus:ring-purple-500 focus:border-transparent">
-                      <option value="openai">OpenAI</option>
-                      <option value="siliconflow">硅基流动</option>
-                      <option value="custom">自定义</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">API URL</label>
-                  <input type="text" value={formData.apiUrl} onChange={e => setFormData({ ...formData, apiUrl: e.target.value })} placeholder="https://api.openai.com/v1/chat/completions" className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-50 focus:ring-2 focus:ring-purple-500 focus:border-transparent" />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">模型 ID</label>
-                  <input type="text" value={formData.modelId} onChange={e => setFormData({ ...formData, modelId: e.target.value })} placeholder="gpt-4" className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-50 focus:ring-2 focus:ring-purple-500 focus:border-transparent" />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">API Key</label>
-                  <input type="password" value={formData.apiKey} onChange={e => setFormData({ ...formData, apiKey: e.target.value })} placeholder="sk-..." className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-50 focus:ring-2 focus:ring-purple-500 focus:border-transparent" />
-                </div>
-
-                {/* 测试连接 */}
-                <div className="flex items-center gap-2 pt-4 border-t border-slate-200 dark:border-slate-700">
-                  <button onClick={handleTest} disabled={testing} className="border border-slate-300 dark:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 px-3 py-1.5 rounded-lg text-sm font-medium flex items-center gap-2 transition-colors disabled:opacity-50 cursor-not-allowed">
-                    {testing ? (<><Loader2 className="w-4 h-4 animate-spin" />测试中...</>) : (<><Edit2 className="w-4 h-4" />测试连接</>)}
-                  </button>
-                  {testResult && (
-                    <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ml-2 ${testResult.success ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300' : 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-300'}`}>
-                      {testResult.success ? (<><CheckCircle className="w-3 h-3 mr-1" />连接成功</>) : (<><XCircle className="w-3 h-3 mr-1" />{testResult.message || '连接失败'}</>)}
-                    </span>
-                  )}
-                </div>
-              </div>
-
-              <div className="p-6 border-t border-slate-200 dark:border-slate-700 flex justify-end gap-2">
-                <button onClick={() => setDialogOpen(false)} className="px-4 py-2 border border-slate-300 dark:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-lg text-sm font-medium transition-colors">取消</button>
-                <button onClick={handleSave} className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">{editingConfig ? '保存' : '创建'}</button>
-              </div>
+              <button
+                onClick={() => window.open('https://cloud.siliconflow.cn/i/8UoNCRqs', '_blank')}
+                className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 md:w-auto"
+              >
+                <ExternalLink className="h-4 w-4" />
+                打开硅基流动
+              </button>
             </div>
           </div>
-        )}
-      </div>
+
+          <div className="mb-6 rounded-lg border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+            <div className="mb-4">
+              <h2 className="text-base font-semibold text-slate-900 dark:text-slate-50">快速开始</h2>
+              <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">选择预设后填写自己的 API Key。</p>
+            </div>
+            <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
+              {Object.entries(PRESET_TEMPLATES).map(([key, template]) => (
+                <button
+                  key={key}
+                  onClick={() => handlePresetSelect(key as keyof typeof PRESET_TEMPLATES)}
+                  className="rounded-lg border border-slate-200 p-4 text-left transition-colors hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800"
+                >
+                  <div className="font-semibold text-slate-900 dark:text-slate-50">{template.name}</div>
+                  <div className="mt-1 truncate text-sm text-slate-500">{template.modelId}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+            <div className="border-b border-slate-200 p-5 dark:border-slate-800">
+              <h2 className="text-base font-semibold text-slate-900 dark:text-slate-50">配置列表</h2>
+              <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">当前保存的大模型连接配置。</p>
+            </div>
+
+            <div className="p-5">
+              {loading ? (
+                <div className="flex items-center justify-center gap-2 py-10 text-sm text-slate-500">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  加载中...
+                </div>
+              ) : configs.length === 0 ? (
+                <div className="rounded-lg border border-dashed border-slate-300 py-10 text-center text-sm text-slate-500 dark:border-slate-700">
+                  暂无配置
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {configs.map((config) => {
+                    const keyInvalid = config.apiKeyStatus && config.apiKeyStatus !== 'ok';
+                    const busy = deletingId === config.id || togglingId === config.id;
+
+                    return (
+                      <div
+                        key={config.id}
+                        className="flex flex-col gap-4 rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950 sm:flex-row sm:items-center sm:justify-between"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="mb-2 flex flex-wrap items-center gap-2">
+                            <span className="truncate font-semibold text-slate-900 dark:text-slate-50">{config.name}</span>
+                            <span
+                              className={`inline-flex items-center rounded px-2 py-0.5 text-xs font-medium ${
+                                config.isActive
+                                  ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
+                                  : 'bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300'
+                              }`}
+                            >
+                              {config.isActive ? '已激活' : '未激活'}
+                            </span>
+                            <span className="inline-flex items-center rounded bg-slate-200 px-2 py-0.5 text-xs font-medium text-slate-700 dark:bg-slate-800 dark:text-slate-300">
+                              {config.providerType}
+                            </span>
+                            {keyInvalid && (
+                              <span className="inline-flex items-center gap-1 rounded bg-rose-100 px-2 py-0.5 text-xs font-medium text-rose-700 dark:bg-rose-950 dark:text-rose-300">
+                                <KeyRound className="h-3 w-3" />
+                                密钥需重填
+                              </span>
+                            )}
+                          </div>
+                          <div className="space-y-1 text-sm text-slate-500">
+                            <div className="truncate">模型：{config.modelId}</div>
+                            <div className="truncate">{config.apiUrl}</div>
+                            {keyInvalid && <div className="text-rose-600 dark:text-rose-400">{config.apiKeyError}</div>}
+                          </div>
+                        </div>
+
+                        <div className="flex w-full flex-shrink-0 items-center justify-end gap-2 sm:w-36">
+                          <button
+                            onClick={() => handleToggleActive(config)}
+                            disabled={busy}
+                            className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors disabled:opacity-50 ${
+                              config.isActive ? 'bg-blue-600' : 'bg-slate-300 dark:bg-slate-700'
+                            }`}
+                            aria-label={config.isActive ? '停用配置' : '激活配置'}
+                          >
+                            <span
+                              className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                                config.isActive ? 'translate-x-6' : 'translate-x-1'
+                              }`}
+                            />
+                          </button>
+                          <button
+                            onClick={() => handleEdit(config)}
+                            disabled={busy}
+                            className="rounded-lg p-2 transition-colors hover:bg-white disabled:opacity-50 dark:hover:bg-slate-800"
+                            aria-label="编辑配置"
+                          >
+                            <Edit2 className="h-4 w-4 text-slate-600 dark:text-slate-400" />
+                          </button>
+                          <button
+                            onClick={() => handleDelete(config.id)}
+                            disabled={busy}
+                            className="rounded-lg p-2 transition-colors hover:bg-rose-50 disabled:opacity-50 dark:hover:bg-rose-950/40"
+                            aria-label="删除配置"
+                          >
+                            {deletingId === config.id ? (
+                              <Loader2 className="h-4 w-4 animate-spin text-rose-500" />
+                            ) : (
+                              <Trash2 className="h-4 w-4 text-rose-500" />
+                            )}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
       </ResponsiveContainer>
+
+      {dialogOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="max-h-[85dvh] w-full max-w-2xl overflow-y-auto rounded-lg bg-white shadow-xl dark:bg-slate-900">
+            <div className="border-b border-slate-200 p-5 dark:border-slate-800">
+              <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-50">
+                {editingConfig ? '编辑配置' : '添加配置'}
+              </h2>
+              <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">保存后会自动设为当前激活配置。</p>
+            </div>
+
+            <div className="space-y-4 p-5">
+              <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+                <div>
+                  <label className="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">配置名称</label>
+                  <input
+                    type="text"
+                    value={formData.name}
+                    onChange={(event) => setFormData({ ...formData, name: event.target.value })}
+                    placeholder="如：OpenAI GPT-4"
+                    className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900 focus:border-transparent focus:ring-2 focus:ring-blue-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-50"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">服务商类型</label>
+                  <select
+                    value={formData.providerType}
+                    onChange={(event) => setFormData({ ...formData, providerType: event.target.value })}
+                    className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900 focus:border-transparent focus:ring-2 focus:ring-blue-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-50"
+                  >
+                    <option value="openai">OpenAI</option>
+                    <option value="siliconflow">硅基流动</option>
+                    <option value="custom">自定义</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">API URL</label>
+                <input
+                  type="text"
+                  value={formData.apiUrl}
+                  onChange={(event) => setFormData({ ...formData, apiUrl: event.target.value })}
+                  placeholder="https://api.openai.com/v1/chat/completions"
+                  className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900 focus:border-transparent focus:ring-2 focus:ring-blue-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-50"
+                />
+              </div>
+
+              <div>
+                <label className="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">模型 ID</label>
+                <input
+                  type="text"
+                  value={formData.modelId}
+                  onChange={(event) => setFormData({ ...formData, modelId: event.target.value })}
+                  placeholder="gpt-4o-mini"
+                  className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900 focus:border-transparent focus:ring-2 focus:ring-blue-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-50"
+                />
+              </div>
+
+              <div>
+                <label className="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">API Key</label>
+                <input
+                  type="password"
+                  value={formData.apiKey}
+                  onChange={(event) => setFormData({ ...formData, apiKey: event.target.value })}
+                  placeholder={editingConfig?.apiKeyStatus && editingConfig.apiKeyStatus !== 'ok' ? '请重新填写 API Key' : 'sk-...'}
+                  className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900 focus:border-transparent focus:ring-2 focus:ring-blue-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-50"
+                />
+              </div>
+
+              <div className="flex flex-col gap-3 border-t border-slate-200 pt-4 dark:border-slate-800 sm:flex-row sm:items-center">
+                <button
+                  onClick={handleTest}
+                  disabled={testing}
+                  className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800 sm:w-auto"
+                >
+                  {testing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Edit2 className="h-4 w-4" />}
+                  {testing ? '测试中...' : '测试连接'}
+                </button>
+                {testResult && (
+                  <span
+                    className={`inline-flex min-h-9 items-center rounded px-3 py-1 text-sm font-medium ${
+                      testResult.success
+                        ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
+                        : 'bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300'
+                    }`}
+                  >
+                    {testResult.success ? (
+                      <CheckCircle className="mr-1 h-4 w-4" />
+                    ) : (
+                      <XCircle className="mr-1 h-4 w-4 flex-shrink-0" />
+                    )}
+                    <span className="break-all">{testResult.success ? '连接成功' : testResult.message || '连接失败'}</span>
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <div className="flex flex-col-reverse gap-2 border-t border-slate-200 p-5 dark:border-slate-800 sm:flex-row sm:justify-end">
+              <button
+                onClick={() => {
+                  setDialogOpen(false);
+                  resetForm();
+                }}
+                disabled={saving}
+                className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+              >
+                取消
+              </button>
+              <button
+                onClick={handleSave}
+                disabled={saving}
+                className="inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:opacity-50"
+              >
+                {saving && <Loader2 className="h-4 w-4 animate-spin" />}
+                {editingConfig ? '保存' : '创建'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

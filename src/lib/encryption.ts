@@ -116,7 +116,6 @@ export const decrypt = (ciphertext: string): string => {
 
     return decrypted.toString('utf8');
   } catch (error) {
-    console.error('Decryption failed:', error);
     throw new Error('Decryption failed');
   }
 };
