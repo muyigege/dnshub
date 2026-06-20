@@ -242,7 +242,7 @@ export default function DomainsPage() {
   });
 
   const getProviderTypeLabel = (type: string) => {
-    const labels: Record<string, string> = { cloudflare: 'Cloudflare', aliyun: '阿里云', tencent: '腾讯云' };
+    const labels: Record<string, string> = { cloudflare: 'Cloudflare', aliyun: '阿里云', tencent: '腾讯云 DNSPod', huawei: '华为云 DNS', route53: 'AWS Route53', google: 'Google Cloud DNS', digitalocean: 'DigitalOcean', godaddy: 'GoDaddy', porkbun: 'Porkbun', namesilo: 'NameSilo', hetzner: 'Hetzner DNS' };
     return labels[type] || type;
   };
 

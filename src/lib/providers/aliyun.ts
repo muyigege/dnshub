@@ -1,318 +1,165 @@
-import { IDNSProvider, DNSRecordData, DomainData, OperationResult, AliYunConfig, DNSRecordType } from './base';
+import crypto from 'crypto';
+import { AliYunConfig, DNSRecordData, DNSRecordType, DomainData, IDNSProvider, OperationResult } from './base';
+import { fail, ok, ttlOrDefault } from './utils';
 
-/**
- * 阿里云 DNS Provider 实现
- */
 export class AliYunProvider implements IDNSProvider {
-  readonly name = 'AliYun';
+  readonly name = 'Aliyun DNS';
+  private readonly endpoint = 'https://alidns.aliyuncs.com/';
 
   constructor(private config: AliYunConfig) {
-    // 设置默认区域
-    if (!config.regionId) {
-      this.config.regionId = 'cn-hangzhou';
-    }
+    if (!config.regionId) this.config.regionId = 'cn-hangzhou';
   }
 
-  /**
-   * 生成阿里云 API 签名
-   */
-  private generateSignature(params: Record<string, string>, timestamp: string): string {
-    const { accessKeyId, accessKeySecret } = this.config;
+  private percentEncode(value: string) {
+    return encodeURIComponent(value)
+      .replace(/\+/g, '%20')
+      .replace(/\*/g, '%2A')
+      .replace(/%7E/g, '~');
+  }
 
-    // 排序参数
-    const sortedParams = Object.keys(params)
+  private timestamp() {
+    return new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+  }
+
+  private generateSignature(params: Record<string, string>) {
+    const sortedQuery = Object.keys(params)
       .sort()
-      .map(key => `${encodeURIComponent(key)}=${encodeURIComponent(params[key])}`)
+      .map((key) => `${this.percentEncode(key)}=${this.percentEncode(params[key])}`)
       .join('&');
-
-    // 构造签名字符串
-    const stringToSign = `GET&%2F&${encodeURIComponent(sortedParams)}`;
-
-    // 使用 HMAC-SHA1 生成签名
-    const crypto = require('crypto');
-    const signature = crypto
-      .createHmac('sha1', `${accessKeySecret}&`)
-      .update(stringToSign)
-      .digest('base64');
-
-    return signature;
+    const stringToSign = `GET&%2F&${this.percentEncode(sortedQuery)}`;
+    return crypto.createHmac('sha1', `${this.config.accessKeySecret}&`).update(stringToSign).digest('base64');
   }
 
-  /**
-   * 调用阿里云 API
-   */
-  private async callAPI(action: string, params: Record<string, string> = {}): Promise<any> {
-    const timestamp = new Date().toISOString();
-    const nonce = Math.random().toString(36).substring(2);
-
-    const requestParams = {
+  private async callAPI(action: string, params: Record<string, string> = {}) {
+    const requestParams: Record<string, string> = {
       Format: 'JSON',
       Version: '2015-01-09',
       AccessKeyId: this.config.accessKeyId,
       SignatureMethod: 'HMAC-SHA1',
       SignatureVersion: '1.0',
-      SignatureNonce: nonce,
-      Timestamp: timestamp,
+      SignatureNonce: crypto.randomUUID(),
+      Timestamp: this.timestamp(),
       Action: action,
       ...params,
     };
+    const signature = this.generateSignature(requestParams);
+    const query = Object.entries({ ...requestParams, Signature: signature })
+      .map(([key, value]) => `${this.percentEncode(key)}=${this.percentEncode(value)}`)
+      .join('&');
 
-    const signature = this.generateSignature(requestParams, timestamp);
-
-    const url = `https://alidns.aliyuncs.com/?${Object.entries(requestParams)
-      .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
-      .join('&')}&Signature=${encodeURIComponent(signature)}`;
-
-    const response = await fetch(url);
-    return await response.json();
+    const response = await fetch(`${this.endpoint}?${query}`);
+    const data = await response.json();
+    if (data.Code) throw new Error(data.Message || data.Code);
+    return data;
   }
 
-  /**
-   * 测试连接
-   */
   async testConnection(): Promise<OperationResult> {
     try {
-      const result = await this.callAPI('DescribeDomains');
-      if (result.Code) {
-        return {
-          success: false,
-          error: result.Message || 'Connection test failed',
-        };
-      }
-      return { success: true };
+      await this.callAPI('DescribeDomains', { PageSize: '1' });
+      return ok();
     } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Connection test failed',
-      };
+      return fail(error, 'Connection test failed');
     }
   }
 
-  /**
-   * 获取所有域名列表
-   */
   async listDomains(): Promise<OperationResult<DomainData[]>> {
     try {
-      let domains: DomainData[] = [];
+      const domains: DomainData[] = [];
       let pageNumber = 1;
-      const pageSize = 50;
-
+      const pageSize = 100;
       while (true) {
         const result = await this.callAPI('DescribeDomains', {
-          PageNumber: pageNumber.toString(),
-          PageSize: pageSize.toString(),
+          PageNumber: String(pageNumber),
+          PageSize: String(pageSize),
         });
-
-        if (result.Code) {
-          return {
-            success: false,
-            error: result.Message || 'Failed to fetch domains',
-          };
-        }
-
         const pageDomains = (result.Domains?.Domain || []).map((domain: any) => ({
-          id: domain.DomainId,
+          id: domain.DomainId || domain.DomainName,
           name: domain.DomainName,
-          status: domain.Status,
+          status: domain.Status || 'active',
         }));
-
-        domains = domains.concat(pageDomains);
-
-        // 检查是否有更多数据
-        const totalItems = result.TotalCount || 0;
-        if (domains.length >= totalItems || pageDomains.length === 0) {
-          break;
-        }
-
+        domains.push(...pageDomains);
+        if (domains.length >= (result.TotalCount || 0) || pageDomains.length === 0) break;
         pageNumber++;
       }
-
-      return { success: true, data: domains };
+      return ok(domains);
     } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Failed to fetch domains',
-      };
+      return fail(error, 'Failed to fetch domains');
     }
   }
 
-  /**
-   * 获取指定域名的 DNS 记录
-   */
   async listRecords(domainName: string): Promise<OperationResult<DNSRecordData[]>> {
     try {
-      // 先获取域名 ID
-      const domainsResult = await this.listDomains();
-      if (!domainsResult.success || !domainsResult.data) {
-        return {
-          success: false,
-          error: domainsResult.error || 'Failed to fetch domains',
-        };
+      const records: DNSRecordData[] = [];
+      let pageNumber = 1;
+      const pageSize = 500;
+      while (true) {
+        const result = await this.callAPI('DescribeDomainRecords', {
+          DomainName: domainName,
+          PageNumber: String(pageNumber),
+          PageSize: String(pageSize),
+        });
+        const pageRecords = (result.DomainRecords?.Record || []).map((record: any) => ({
+          id: String(record.RecordId),
+          type: record.Type as DNSRecordType,
+          name: record.RR || '@',
+          content: record.Value,
+          ttl: Number(record.TTL) || 600,
+          priority: record.Priority !== undefined ? Number(record.Priority) : undefined,
+        }));
+        records.push(...pageRecords);
+        if (records.length >= (result.TotalCount || 0) || pageRecords.length === 0) break;
+        pageNumber++;
       }
-
-      const domain = domainsResult.data.find(d => d.name === domainName);
-      if (!domain) {
-        return {
-          success: false,
-          error: `Domain ${domainName} not found`,
-        };
-      }
-
-      // 获取 DNS 记录
-      const result = await this.callAPI('DescribeDomainRecords', {
-        DomainName: domainName,
-        PageSize: '500',
-      });
-
-      if (result.Code) {
-        return {
-          success: false,
-          error: result.Message || 'Failed to fetch DNS records',
-        };
-      }
-
-      const records: DNSRecordData[] = (result.DomainRecords?.Record || []).map((record: any) => ({
-        id: record.RecordId,
-        type: record.Type as DNSRecordType,
-        name: record.RR,
-        content: record.Value,
-        ttl: record.TTL,
-        priority: record.Priority,
-      }));
-
-      return { success: true, data: records };
+      return ok(records);
     } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Failed to fetch DNS records',
-      };
+      return fail(error, 'Failed to fetch DNS records');
     }
   }
 
-  /**
-   * 添加 DNS 记录
-   */
   async addRecord(domainName: string, record: Omit<DNSRecordData, 'id'>): Promise<OperationResult<DNSRecordData>> {
     try {
       const params: Record<string, string> = {
         DomainName: domainName,
-        RR: record.name,
+        RR: record.name || '@',
         Type: record.type,
         Value: record.content,
-        TTL: (record.ttl || 600).toString(),
+        TTL: String(ttlOrDefault(record.ttl)),
       };
-
-      if (record.type === 'MX' && record.priority) {
-        params.Priority = record.priority.toString();
-      }
-
+      if (record.priority !== undefined) params.Priority = String(record.priority);
       const result = await this.callAPI('AddDomainRecord', params);
-
-      if (result.Code) {
-        return {
-          success: false,
-          error: result.Message || 'Failed to add DNS record',
-        };
-      }
-
-      const newRecord: DNSRecordData = {
-        id: result.RecordId,
-        type: record.type,
-        name: record.name,
-        content: record.content,
-        ttl: record.ttl || 600,
-        priority: record.priority,
-      };
-
-      return { success: true, data: newRecord };
+      return ok({ ...record, id: String(result.RecordId), ttl: ttlOrDefault(record.ttl) });
     } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Failed to add DNS record',
-      };
+      return fail(error, 'Failed to add DNS record');
     }
   }
 
-  /**
-   * 更新 DNS 记录
-   */
   async updateRecord(domainName: string, recordId: string, record: Partial<DNSRecordData>): Promise<OperationResult<DNSRecordData>> {
     try {
-      // 先获取当前记录
-      const recordsResult = await this.listRecords(domainName);
-      if (!recordsResult.success || !recordsResult.data) {
-        return {
-          success: false,
-          error: recordsResult.error || 'Failed to fetch records',
-        };
-      }
-
-      const currentRecord = recordsResult.data.find(r => r.id === recordId);
-      if (!currentRecord) {
-        return {
-          success: false,
-          error: `Record ${recordId} not found`,
-        };
-      }
-
+      const records = await this.listRecords(domainName);
+      const current = records.data?.find((item) => item.id === recordId);
+      if (!current) return fail(`Record ${recordId} not found`, 'Record not found');
+      const updated = { ...current, ...record };
       const params: Record<string, string> = {
         RecordId: recordId,
-        RR: record.name || currentRecord.name,
-        Type: record.type || currentRecord.type,
-        Value: record.content || currentRecord.content,
-        TTL: (record.ttl || currentRecord.ttl || 600).toString(),
+        RR: updated.name || '@',
+        Type: updated.type,
+        Value: updated.content,
+        TTL: String(ttlOrDefault(updated.ttl)),
       };
-
-      if ((record.type || currentRecord.type) === 'MX') {
-        const priority = record.priority || currentRecord.priority || 10;
-        params.Priority = priority.toString();
-      }
-
-      const result = await this.callAPI('UpdateDomainRecord', params);
-
-      if (result.Code) {
-        return {
-          success: false,
-          error: result.Message || 'Failed to update DNS record',
-        };
-      }
-
-      const updatedRecord: DNSRecordData = {
-        ...currentRecord,
-        ...record,
-      };
-
-      return { success: true, data: updatedRecord };
+      if (updated.priority !== undefined) params.Priority = String(updated.priority);
+      await this.callAPI('UpdateDomainRecord', params);
+      return ok(updated);
     } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Failed to update DNS record',
-      };
+      return fail(error, 'Failed to update DNS record');
     }
   }
 
-  /**
-   * 删除 DNS 记录
-   */
   async deleteRecord(domainName: string, recordId: string): Promise<OperationResult> {
     try {
-      const result = await this.callAPI('DeleteDomainRecord', {
-        RecordId: recordId,
-      });
-
-      if (result.Code) {
-        return {
-          success: false,
-          error: result.Message || 'Failed to delete DNS record',
-        };
-      }
-
-      return { success: true };
+      await this.callAPI('DeleteDomainRecord', { RecordId: recordId });
+      return ok();
     } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Failed to delete DNS record',
-      };
+      return fail(error, 'Failed to delete DNS record');
     }
   }
 }

@@ -10,7 +10,7 @@ import { revalidatePath } from 'next/cache';
 /**
  * 服务商类型（字符串类型，用于 Server Actions 序列化）
  */
-export type ProviderTypeString = 'cloudflare' | 'aliyun' | 'tencent';
+export type ProviderTypeString = 'cloudflare' | 'aliyun' | 'tencent' | 'huawei' | 'route53' | 'google' | 'digitalocean' | 'godaddy' | 'porkbun' | 'namesilo' | 'hetzner';
 
 /**
  * 服务商输入类型（简化结构，避免复杂的嵌套对象）
