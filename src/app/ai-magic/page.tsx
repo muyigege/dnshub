@@ -260,11 +260,35 @@ export default function AIMagicPage() {
         );
     };
 
-    const copyLog = (log: ExecLog) => {
+    const copyLog = async (log: ExecLog) => {
         const text = `[${log.timestamp.toLocaleTimeString()}] ${log.action} ${log.type} ${log.name}: ${log.message}`;
-        navigator.clipboard.writeText(text);
+        // HTTP 部署时 navigator.clipboard 不可用，需降级
+        if (navigator.clipboard && window.isSecureContext) {
+            try {
+                await navigator.clipboard.writeText(text);
+            } catch {
+                fallbackCopy(text);
+            }
+        } else {
+            fallbackCopy(text);
+        }
         setCopiedId(log.id);
         setTimeout(() => setCopiedId(null), 2000);
+    };
+
+    const fallbackCopy = (text: string) => {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        try {
+            document.execCommand('copy');
+        } catch {
+            // 忽略复制失败
+        }
+        document.body.removeChild(ta);
     };
 
     const clearLogs = () => setExecLogs([]);

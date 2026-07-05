@@ -599,6 +599,17 @@ async function callCustomAI(
     throw new Error(`API request failed: ${response.status} - ${errorText}`);
   }
 
+  // 检查响应类型，避免把 HTML 当 JSON 解析时报 "Unexpected token '<'"
+  const contentType = response.headers.get('content-type') || '';
+  if (!contentType.includes('application/json')) {
+    const bodySnippet = (await response.text()).slice(0, 200);
+    throw new Error(
+      `AI API 返回的不是 JSON（Content-Type: ${contentType || 'unknown'}）。` +
+      `请检查 AI 配置中的 API URL 是否指向 /v1/chat/completions 端点。` +
+      `响应片段: ${bodySnippet}`
+    );
+  }
+
   const data = await response.json();
   return data.choices[0]?.message?.content || '';
 }

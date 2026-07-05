@@ -15,12 +15,26 @@ const toErrorMessage = (error: unknown) =>
 export function normalizeAIChatCompletionsUrl(apiUrl: string) {
   const trimmed = apiUrl.trim().replace(/\/+$/, '');
 
+  // 已经是完整的 chat/completions 端点，直接返回
   if (/\/chat\/completions$/i.test(trimmed)) {
     return trimmed;
   }
 
+  // 已经包含版本号（如 /v1），补全 chat/completions
   if (/\/v\d+$/i.test(trimmed)) {
     return `${trimmed}/chat/completions`;
+  }
+
+  // 根域名（如 https://api.openai.com）：自动补全为 /v1/chat/completions
+  // 仅对常见的 OpenAI 兼容 API 主机生效，避免误伤自定义路径
+  try {
+    const parsed = new URL(trimmed);
+    // 路径为空或仅为 /
+    if (parsed.pathname === '/' || parsed.pathname === '') {
+      return `${trimmed}/v1/chat/completions`;
+    }
+  } catch {
+    // 不是合法 URL，原样返回
   }
 
   return trimmed;

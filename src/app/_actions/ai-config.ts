@@ -219,6 +219,16 @@ export async function testAIConfiguration(data: {
       throw new Error(`API request failed: ${response.status} - ${errorText}`);
     }
 
+    // 检查响应类型，避免 URL 填错（如填了网站首页）时测试仍通过
+    const contentType = response.headers.get('content-type') || '';
+    if (!contentType.includes('application/json')) {
+      const bodySnippet = (await response.text()).slice(0, 200);
+      throw new Error(
+        `AI API 返回的不是 JSON（Content-Type: ${contentType || 'unknown'}），` +
+        `请确认 URL 指向 /v1/chat/completions 端点。响应片段: ${bodySnippet}`
+      );
+    }
+
     return { success: true, message: 'Connection successful' };
   } catch (error) {
     console.error('Test AI configuration error:', error);
