@@ -32,26 +32,25 @@ FROM node:24-slim AS production
 
 WORKDIR /app
 
+# 先创建非 root 用户（COPY --chown 比构建后 chown -R 快几十倍）
+RUN useradd -m -u 1001 appuser
+
 # 安装 pnpm（生产环境启动需要）
 RUN npm install -g pnpm
 
-# 从构建阶段复制完整的 node_modules（包含已编译的原生模块）
-COPY --from=base /app/node_modules ./node_modules
+# 从构建阶段复制文件，直接用 --chown 设置属主，避免缓慢的 chown -R
+COPY --from=base --chown=appuser:appuser /app/node_modules ./node_modules
+COPY --from=base --chown=appuser:appuser /app/.next ./.next
+COPY --from=base --chown=appuser:appuser /app/src ./src
+COPY --from=base --chown=appuser:appuser /app/package.json ./package.json
+COPY --from=base --chown=appuser:appuser /app/pnpm-lock.yaml ./pnpm-lock.yaml
+COPY --from=base --chown=appuser:appuser /app/pnpm-workspace.yaml ./pnpm-workspace.yaml
+COPY --from=base --chown=appuser:appuser /app/.npmrc ./.npmrc
+COPY --from=base --chown=appuser:appuser /app/tsconfig.json ./tsconfig.json
+COPY --from=base --chown=appuser:appuser /app/next.config.* ./
 
-# 从构建阶段复制构建产物
-COPY --from=base /app/.next ./.next
-COPY --from=base /app/src ./src
-COPY --from=base /app/package.json ./package.json
-COPY --from=base /app/pnpm-lock.yaml ./pnpm-lock.yaml
-COPY --from=base /app/pnpm-workspace.yaml ./pnpm-workspace.yaml
-COPY --from=base /app/.npmrc ./.npmrc
-COPY --from=base /app/tsconfig.json ./tsconfig.json
-COPY --from=base /app/next.config.* ./
-
-# 创建非 root 用户及持久化数据目录
-RUN useradd -m -u 1001 appuser && \
-    mkdir -p /app/data && \
-    chown -R appuser:appuser /app
+# 创建持久化数据目录并设置属主（只有 data 目录需要运行时写权限）
+RUN mkdir -p /app/data && chown appuser:appuser /app
 
 USER appuser
 
