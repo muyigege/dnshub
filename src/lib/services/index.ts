@@ -9,4 +9,5 @@ export * from './errors';
 export * from './audit-logger';
 export * from './provider-service';
 export * from './dns-record-service';
+export * from './operation-query-service';
 export * from './rollback-service';

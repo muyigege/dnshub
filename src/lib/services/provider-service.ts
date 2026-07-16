@@ -195,6 +195,45 @@ function mapDomainRow(row: typeof domains.$inferSelect): DomainEntity {
 }
 
 /**
+ * 列出所有服务商（只读，不含凭证）。
+ * 用于 MCP/REST 只读查询入口，不暴露 credentials 字段。
+ */
+export async function listProviderEntities(onlyActive = false): Promise<ProviderEntity[]> {
+  let query = db.select().from(dnsProviders);
+  if (onlyActive) {
+    query = query.where(eq(dnsProviders.isActive, true)) as typeof query;
+  }
+  const rows = await query;
+  return rows.map(row => ({
+    id: row.id,
+    name: row.name,
+    type: row.type,
+    isActive: row.isActive,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  }));
+}
+
+/**
+ * 列出域名（只读）。可选按 providerId 筛选。
+ */
+export async function listDomainEntities(options: { providerId?: number; onlyActive?: boolean } = {}): Promise<DomainEntity[]> {
+  const conditions = [];
+  if (options.providerId !== undefined) {
+    conditions.push(eq(domains.providerId, options.providerId));
+  }
+  if (options.onlyActive) {
+    conditions.push(eq(domains.isActive, true));
+  }
+
+  const rows = conditions.length > 0
+    ? await db.select().from(domains).where(and(...conditions))
+    : await db.select().from(domains);
+
+  return rows.map(mapDomainRow);
+}
+
+/**
  * 实例化 Provider。
  * 内部处理：加载服务商记录 → 解密凭证 → DNSProviderFactory.create。
  */
