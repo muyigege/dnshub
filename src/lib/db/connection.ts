@@ -113,6 +113,21 @@ CREATE TABLE IF NOT EXISTS \`operation_logs\` (
           }
         });
     }
+
+    // Migration: add proxied/proxiable columns to dns_records (idempotent)
+    const dnsRecordMigrationColumns: Array<[string, string]> = [
+      ['proxied', 'integer'],
+      ['proxiable', 'integer'],
+    ];
+    for (const [col, type] of dnsRecordMigrationColumns) {
+      _client.execute(`ALTER TABLE \`dns_records\` ADD COLUMN \`${col}\` ${type}`)
+        .catch((err: unknown) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (!msg.includes('duplicate column') && !msg.toLowerCase().includes('already exists')) {
+            console.error(`Failed to migrate dns_records.${col}:`, err);
+          }
+        });
+    }
   }
   return _client;
 }

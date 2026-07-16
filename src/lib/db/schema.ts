@@ -121,6 +121,10 @@ export const dnsRecords = sqliteTable("dns_records", {
   isActive: integer("is_active", { mode: 'boolean' }).default(true).notNull(),
   createdAt: text("created_at").default(sql`(CURRENT_TIMESTAMP)`).notNull(),
   updatedAt: text("updated_at").default(sql`(CURRENT_TIMESTAMP)`).notNull(),
+  // Cloudflare 代理状态（仅 A/AAAA/CNAME 生效）
+  proxied: integer("proxied", { mode: 'boolean' }),
+  // 该记录是否支持被代理（只读能力，由 Provider 返回）
+  proxiable: integer("proxiable", { mode: 'boolean' }),
 });
 
 // 导出类型

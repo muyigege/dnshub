@@ -368,12 +368,18 @@ export async function rollbackOperation(
       if (!providerRecordId) {
         throw new RollbackFailedError('beforeSnapshot 缺少 providerRecordId', 'beforeSnapshot missing providerRecordId');
       }
+      // 恢复 proxied（仅当快照中存在有效值时；null/undefined 视为未设置）
+      const restoreProxied =
+        plan.beforeSnapshot.proxied === true || plan.beforeSnapshot.proxied === false
+          ? (plan.beforeSnapshot.proxied as boolean)
+          : undefined;
       const result = await provider.updateRecord(domain.name, providerRecordId, {
         type: plan.beforeSnapshot.type as DNSRecordType,
         name: String(plan.beforeSnapshot.name ?? ''),
         content: String(plan.beforeSnapshot.content ?? ''),
         ttl: plan.beforeSnapshot.ttl ? Number(plan.beforeSnapshot.ttl) : undefined,
         priority: plan.beforeSnapshot.priority != null ? Number(plan.beforeSnapshot.priority) : undefined,
+        proxied: restoreProxied,
       });
       if (!result.success) {
         throw new Error(result.error || 'Provider updateRecord failed');
@@ -388,6 +394,10 @@ export async function rollbackOperation(
             content: String(plan.beforeSnapshot.content ?? ''),
             ttl: plan.beforeSnapshot.ttl ? Number(plan.beforeSnapshot.ttl) : 600,
             priority: plan.beforeSnapshot.priority != null ? Number(plan.beforeSnapshot.priority) : null,
+            proxied: restoreProxied ?? null,
+            proxiable: plan.beforeSnapshot.proxiable === true || plan.beforeSnapshot.proxiable === false
+              ? (plan.beforeSnapshot.proxiable as boolean)
+              : null,
             updatedAt: new Date().toISOString(),
           })
           .where(eq(dnsRecords.id, op.recordId));
@@ -399,12 +409,17 @@ export async function rollbackOperation(
       if (!plan.beforeSnapshot) {
         throw new RollbackFailedError('缺少 beforeSnapshot，无法重建记录', 'Missing beforeSnapshot');
       }
+      const restoreProxied =
+        plan.beforeSnapshot.proxied === true || plan.beforeSnapshot.proxied === false
+          ? (plan.beforeSnapshot.proxied as boolean)
+          : undefined;
       const result = await provider.addRecord(domain.name, {
         type: plan.beforeSnapshot.type as DNSRecordType,
         name: String(plan.beforeSnapshot.name ?? ''),
         content: String(plan.beforeSnapshot.content ?? ''),
         ttl: plan.beforeSnapshot.ttl ? Number(plan.beforeSnapshot.ttl) : 600,
         priority: plan.beforeSnapshot.priority != null ? Number(plan.beforeSnapshot.priority) : undefined,
+        proxied: restoreProxied,
       });
       if (!result.success || !result.data) {
         throw new Error(result.error || 'Provider addRecord failed');
@@ -419,6 +434,8 @@ export async function rollbackOperation(
         priority: plan.beforeSnapshot.priority != null ? Number(plan.beforeSnapshot.priority) : null,
         providerRecordId: result.data.id,
         isActive: true,
+        proxied: result.data.proxied ?? restoreProxied ?? null,
+        proxiable: result.data.proxiable ?? null,
       });
       message = `已重建记录 ${plan.beforeSnapshot.name ?? ''}（补偿 DELETE）`;
     }

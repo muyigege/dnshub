@@ -175,6 +175,14 @@ export class CloudflareProvider implements IDNSProvider {
         ttl: record.ttl,
         priority: record.priority,
         proxied: record.proxied,
+        // 读取 Cloudflare 返回的 proxiable 能力字段
+        proxiable: record.proxiable,
+        // 保存 Cloudflare 特定元数据，便于扩展
+        providerMetadata: {
+          zone_id: record.zone_id,
+          created_on: record.created_on,
+          modified_on: record.modified_on,
+        },
       }));
 
       return { success: true, data: records };
@@ -216,8 +224,16 @@ export class CloudflareProvider implements IDNSProvider {
         ttl: record.ttl || 600,
       };
 
-      // Cloudflare 特定字段
+      // Cloudflare proxied 仅对 A/AAAA/CNAME 生效，其他类型设置会被 API 拒绝
+      // 这里做前置校验，避免无效请求
+      const PROXIABLE_TYPES = ['A', 'AAAA', 'CNAME'];
       if (record.proxied !== undefined) {
+        if (!PROXIABLE_TYPES.includes(record.type.toUpperCase())) {
+          return {
+            success: false,
+            error: `Cloudflare 代理状态(proxied)仅支持 A/AAAA/CNAME 记录，当前类型为 ${record.type}`,
+          };
+        }
         payload.proxied = record.proxied;
       }
 
@@ -248,6 +264,12 @@ export class CloudflareProvider implements IDNSProvider {
         ttl: data.result.ttl,
         priority: data.result.priority,
         proxied: data.result.proxied,
+        proxiable: data.result.proxiable,
+        providerMetadata: {
+          zone_id: data.result.zone_id,
+          created_on: data.result.created_on,
+          modified_on: data.result.modified_on,
+        },
       };
 
       return { success: true, data: newRecord };
@@ -287,7 +309,17 @@ export class CloudflareProvider implements IDNSProvider {
       if (record.name) payload.name = record.name;
       if (record.content) payload.content = record.content;
       if (record.ttl) payload.ttl = record.ttl;
-      if (record.proxied !== undefined) payload.proxied = record.proxied;
+      // proxied 类型校验：如果同时传了 type，校验类型；否则放行由 API 判断
+      if (record.proxied !== undefined) {
+        const PROXIABLE_TYPES = ['A', 'AAAA', 'CNAME'];
+        if (record.type && !PROXIABLE_TYPES.includes(record.type.toUpperCase())) {
+          return {
+            success: false,
+            error: `Cloudflare 代理状态(proxied)仅支持 A/AAAA/CNAME 记录，当前类型为 ${record.type}`,
+          };
+        }
+        payload.proxied = record.proxied;
+      }
       if (record.type === 'MX' && record.priority) payload.priority = record.priority;
 
       const response = await fetch(
@@ -316,6 +348,12 @@ export class CloudflareProvider implements IDNSProvider {
         ttl: data.result.ttl,
         priority: data.result.priority,
         proxied: data.result.proxied,
+        proxiable: data.result.proxiable,
+        providerMetadata: {
+          zone_id: data.result.zone_id,
+          created_on: data.result.created_on,
+          modified_on: data.result.modified_on,
+        },
       };
 
       return { success: true, data: updatedRecord };

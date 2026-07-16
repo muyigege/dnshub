@@ -7,7 +7,12 @@ export interface DNSRecordData {
   content: string;
   ttl?: number;
   priority?: number;
+  /** Cloudflare 代理状态：true=已代理(橙云)，false=仅DNS(灰云)。仅 A/AAAA/CNAME 生效 */
   proxied?: boolean;
+  /** 该记录是否支持被代理（只读能力，由 Provider 返回）。仅 Cloudflare 提供 */
+  proxiable?: boolean;
+  /** Provider 特定元数据（不强制结构，用于扩展） */
+  providerMetadata?: Record<string, unknown>;
 }
 
 export interface DomainData {

@@ -85,6 +85,10 @@ export interface RecordSnapshot {
   priority: number | null;
   providerRecordId: string | null;
   isActive: boolean;
+  // Cloudflare 代理状态（仅 A/AAAA/CNAME 时有意义；其他服务商为 null）
+  proxied: boolean | null;
+  // 该记录是否可被代理（Provider 返回的只读能力字段）
+  proxiable: boolean | null;
 }
 
 export interface CreateRecordResult {
@@ -99,6 +103,12 @@ export interface UpdateRecordResult {
 }
 
 export interface DeleteRecordResult {
+  before: RecordSnapshot;
+  operationId: number;
+}
+
+export interface SetProxyResult {
+  record: RecordSnapshot;
   before: RecordSnapshot;
   operationId: number;
 }
@@ -159,6 +169,8 @@ function toRecordSnapshot(row: typeof dnsRecords.$inferSelect): RecordSnapshot {
     priority: row.priority,
     providerRecordId: row.providerRecordId,
     isActive: row.isActive,
+    proxied: row.proxied ?? null,
+    proxiable: row.proxiable ?? null,
   };
 }
 
@@ -386,6 +398,9 @@ export async function createRecord(
       priority: input.priority ?? null,
       providerRecordId: providerRecord.id,
       isActive: true,
+      // Cloudflare proxied 能力模型
+      proxied: providerRecord.proxied ?? input.proxied ?? null,
+      proxiable: providerRecord.proxiable ?? null,
     })
     .returning();
 
@@ -406,6 +421,8 @@ export async function createRecord(
       ttl: record.ttl,
       priority: record.priority,
       providerRecordId: providerRecord.id,
+      proxied: record.proxied,
+      proxiable: record.proxiable,
     },
     providerId: providerEntity.id,
     domainId: domain.id,
@@ -474,7 +491,7 @@ export async function updateRecord(
     );
   }
 
-  await callProvider(
+  const providerRecord = await callProvider(
     () => provider.updateRecord(domain.name, before.providerRecordId!, {
       type: changes.type as DNSRecordType | undefined,
       name: changes.name,
@@ -485,6 +502,10 @@ export async function updateRecord(
     }),
     providerEntity.type
   );
+
+  // Provider 返回的 proxiable/proxied 为权威值，覆盖本地
+  if (providerRecord.proxiable !== undefined) updateData.proxiable = providerRecord.proxiable;
+  if (providerRecord.proxied !== undefined) updateData.proxied = providerRecord.proxied;
 
   // 5. 更新本地 DB
   const [updated] = await db
@@ -513,6 +534,8 @@ export async function updateRecord(
         content: before.content,
         ttl: before.ttl,
         priority: before.priority,
+        proxied: before.proxied,
+        proxiable: before.proxiable,
       },
       after: {
         type: after.type,
@@ -520,6 +543,8 @@ export async function updateRecord(
         content: after.content,
         ttl: after.ttl,
         priority: after.priority,
+        proxied: after.proxied,
+        proxiable: after.proxiable,
       },
     },
     providerId: providerEntity.id,
@@ -591,6 +616,8 @@ export async function deleteRecord(
       ttl: before.ttl,
       priority: before.priority,
       providerRecordId: before.providerRecordId,
+      proxied: before.proxied,
+      proxiable: before.proxiable,
     },
     providerId: providerEntity.id,
     domainId: domain.id,
@@ -602,6 +629,122 @@ export async function deleteRecord(
   });
 
   return { before, operationId: operationId ?? 0 };
+}
+
+// ============================================================
+// Cloudflare 代理状态切换
+// ============================================================
+
+/**
+ * 切换 Cloudflare 记录的代理状态（proxied）。
+ *
+ * 这是 updateRecord 的特化版本，专用于只切换 proxied 的场景：
+ * - 校验 provider 是否支持 proxy
+ * - 校验记录类型是否可被代理（A/AAAA/CNAME）
+ * - 调用 Provider API（仅传 proxied）
+ * - 同步本地 DB
+ * - 写入审计日志（action=UPDATE，details 标记 proxyOnly=true）
+ *
+ * 对于不支持代理的 provider，抛出 CapabilityUnsupportedError。
+ */
+export async function setProxy(
+  recordId: number,
+  proxied: boolean,
+  context: AuditContext
+): Promise<SetProxyResult> {
+  const startedAt = now();
+
+  // 1. 加载已有记录
+  const existingRow = await getRecordEntity(recordId);
+  const before = toRecordSnapshot(existingRow);
+
+  // 2. 加载 domain + provider
+  const { provider, domain, providerEntity } = await createProviderInstanceForDomain(before.domainId);
+
+  // 3. 能力校验
+  const capability = getProviderCapability(providerEntity.type);
+  if (!capability.supportsProxy) {
+    throw new CapabilityUnsupportedError(
+      `服务商 ${providerEntity.name} 不支持代理状态（proxied）`,
+      `Provider ${providerEntity.name} does not support proxied status`
+    );
+  }
+  if (!PROXIABLE_RECORD_TYPES.has(before.type.toUpperCase())) {
+    throw new CapabilityUnsupportedError(
+      `记录类型 ${before.type} 不支持代理，仅 A/AAAA/CNAME 支持`,
+      `Record type ${before.type} cannot be proxied, only A/AAAA/CNAME are supported`
+    );
+  }
+
+  // 4. 调用 Provider API（仅切换 proxied）
+  if (!before.providerRecordId) {
+    throw new NotFoundError(
+      `记录 ${recordId} 缺少 providerRecordId，无法更新云端记录`,
+      `Record ${recordId} has no providerRecordId, cannot update remote record`
+    );
+  }
+
+  const providerRecord = await callProvider(
+    () => provider.updateRecord(domain.name, before.providerRecordId!, {
+      proxied,
+    }),
+    providerEntity.type
+  );
+
+  // 5. 更新本地 DB
+  const updateData: Record<string, unknown> = {
+    proxied: providerRecord.proxied ?? proxied,
+  };
+  if (providerRecord.proxiable !== undefined) updateData.proxiable = providerRecord.proxiable;
+
+  const [updated] = await db
+    .update(dnsRecords)
+    .set({
+      ...updateData,
+      updatedAt: now(),
+    })
+    .where(eq(dnsRecords.id, recordId))
+    .returning();
+
+  const after = toRecordSnapshot(updated);
+  const completedAt = now();
+
+  // 6. 审计日志
+  const operationId = await writeAuditLog({
+    action: 'UPDATE',
+    entityType: 'record',
+    entityId: recordId,
+    status: 'success',
+    details: {
+      domain: domain.name,
+      proxyOnly: true,
+      before: {
+        type: before.type,
+        name: before.name,
+        content: before.content,
+        proxied: before.proxied,
+        proxiable: before.proxiable,
+      },
+      after: {
+        type: after.type,
+        name: after.name,
+        content: after.content,
+        proxied: after.proxied,
+        proxiable: after.proxiable,
+      },
+    },
+    providerId: providerEntity.id,
+    domainId: domain.id,
+    recordId: recordId,
+    beforeSnapshot: before as unknown as Record<string, unknown>,
+    requestedSnapshot: { proxied },
+    afterSnapshot: after as unknown as Record<string, unknown>,
+    startedAt,
+    completedAt,
+    context,
+  });
+
+  return { record: after, before, operationId: operationId ?? 0 };
 }
 
 // ============================================================
@@ -759,6 +902,9 @@ export async function syncRecords(
           ttl: remote.ttl ?? local.ttl,
           priority: remote.priority ?? null,
           providerRecordId: remote.id,
+          // Cloudflare proxied/proxiable 同步
+          proxied: remote.proxied ?? null,
+          proxiable: remote.proxiable ?? null,
           updatedAt: now(),
         })
         .where(eq(dnsRecords.id, local.id));
@@ -774,6 +920,9 @@ export async function syncRecords(
         priority: remote.priority ?? null,
         providerRecordId: remote.id,
         isActive: true,
+        // Cloudflare proxied/proxiable 同步
+        proxied: remote.proxied ?? null,
+        proxiable: remote.proxiable ?? null,
       });
       created++;
     }
