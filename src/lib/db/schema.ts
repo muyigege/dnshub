@@ -19,10 +19,22 @@ export const aiConfigurations = sqliteTable("ai_configurations", {
 
 /**
  * 操作日志表
- * 记录所有 DNS 操作历史
+ * 记录所有 DNS 操作历史（含批量、回退、快照、来源等扩展字段）
+ *
+ * 字段设计原则：
+ * - batchId / parentOperationId：支持批量操作和子操作关联
+ * - source：区分 ui / rest / ai / mcp / system
+ * - beforeSnapshot / afterSnapshot：用于 diff 展示和补偿回退
+ * - status：支持 pending / running / success / failed / partial / rolled_back / rollback_failed
+ * - rollbackOf / rolledBackAt：回退关系链
+ * - requestId / idempotencyKey：用于 MCP 和 API 幂等
+ * - actor / clientName：操作发起方（不记录密钥）
+ *
+ * 敏感数据脱敏由 AuditLogger 负责，凭证/API Key 不得写入任何字段。
  */
 export const operationLogs = sqliteTable("operation_logs", {
   id: integer("id").primaryKey({ autoIncrement: true }).notNull(),
+  // 原有字段（保持向后兼容）
   action: text("action").notNull(),
   entityType: text("entity_type").notNull(),
   entityId: integer("entity_id").notNull(),
@@ -31,6 +43,38 @@ export const operationLogs = sqliteTable("operation_logs", {
   errorMessage: text("error_message"),
   createdBy: text("created_by"),
   createdAt: text("created_at").default(sql`(CURRENT_TIMESTAMP)`).notNull(),
+
+  // 批量与父子关系
+  batchId: text("batch_id"),
+  parentOperationId: integer("parent_operation_id"),
+
+  // 来源与幂等
+  source: text("source").default('system').notNull(),
+  actor: text("actor"),
+  clientName: text("client_name"),
+  requestId: text("request_id"),
+  idempotencyKey: text("idempotency_key"),
+
+  // 关联实体
+  providerId: integer("provider_id"),
+  domainId: integer("domain_id"),
+  recordId: integer("record_id"),
+
+  // 快照（JSON 字符串，脱敏后存储）
+  beforeSnapshot: text("before_snapshot"),
+  requestedSnapshot: text("requested_snapshot"),
+  afterSnapshot: text("after_snapshot"),
+
+  // 状态与时间
+  startedAt: text("started_at"),
+  completedAt: text("completed_at"),
+
+  // 回退关系
+  rollbackOf: integer("rollback_of"),
+  rolledBackAt: text("rolled_back_at"),
+
+  // 错误码（标准化）
+  errorCode: text("error_code"),
 });
 
 /**

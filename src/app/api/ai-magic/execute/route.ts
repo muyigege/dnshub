@@ -1,121 +1,168 @@
 import { NextRequest, NextResponse } from 'next/server';
+import {
+  createRecord,
+  updateRecord,
+  deleteRecord,
+  listRecords,
+  findDomainByName,
+  getRecord,
+  DnsServiceError,
+  normalizeError,
+  ValidationError,
+  type AuditContext,
+  type CreateRecordInput,
+  type UpdateRecordInput,
+} from '@/lib/services';
 import { db } from '@/lib/db/connection';
-import { domains, dnsProviders, dnsRecords, operationLogs } from '@/lib/db/schema';
+import { dnsRecords } from '@/lib/db/schema';
 import { eq, and } from 'drizzle-orm';
-import { decryptJSON } from '@/lib/encryption';
-import { DNSProviderFactory, ProviderType } from '@/lib/providers/base';
 
 /**
  * POST /api/ai-magic/execute
  * 执行经 AI 解析并由用户确认后的 DNS 操作指令
+ *
+ * 已修复（vs 旧代码）：
+ * - 旧代码操作云端后不写本地 DB（数据一致性 bug）→ 现在通过 Service 层统一同步
+ * - 旧代码审计日志格式不统一（entityType='domain', action='AI_xxx'）→ 现在统一为 record/CREATE|UPDATE|DELETE
+ * - 旧代码不写失败日志 → 现在 Service 层会写
  */
 export async function POST(request: NextRequest) {
+  try {
+    const instruction = await request.json();
+    const { action, domain, type, name, content, ttl, priority, proxied } = instruction;
 
-    try {
-        const instruction = await request.json();
-
-        // 如果是批量记录则需要拆解循环，这里为了简化先支持单条记录。
-        // 我们假设前端如果有 batch 的情况，已经将其拆解为一个个单独的 API 请求发过来，或者在这里遍历。
-        // 此处写单个指令执行逻辑：
-        const { action, domain, type, name, content, ttl, priority } = instruction;
-
-        if (!action || !domain || !type || !name) {
-            return NextResponse.json({ success: false, error: '参数不完整' }, { status: 400 });
-        }
-
-        // 查找域名
-        const [domainRecord] = await db
-            .select()
-            .from(domains)
-            .where(eq(domains.name, domain));
-
-        if (!domainRecord) {
-            return NextResponse.json({ success: false, error: `域名 ${domain} 未找到，请先同步` }, { status: 404 });
-        }
-
-        // 查找服务商
-        const [provider] = await db
-            .select()
-            .from(dnsProviders)
-            .where(eq(dnsProviders.id, domainRecord.providerId));
-
-        if (!provider) {
-            return NextResponse.json({ success: false, error: '无法找到服务商配置' }, { status: 404 });
-        }
-
-        const credentials = decryptJSON<Record<string, string>>(provider.credentials);
-        const providerTypeEnum = provider.type.toUpperCase() as keyof typeof ProviderType;
-        const dnsProvider = DNSProviderFactory.create(ProviderType[providerTypeEnum], credentials);
-
-        console.log(`[AI Magic Exec] Executing ${action} on ${domain} via ${provider.name}`);
-
-        let apiResult;
-        let detailsStr = '';
-
-        if (action === 'CREATE') {
-            if (!content) throw new Error('CREATE 操作缺少 content 参数');
-            apiResult = await dnsProvider.addRecord(domainRecord.name, {
-                type, name, content, ttl: ttl || 600, priority: priority || 10
-            });
-            detailsStr = `Created ${type} record ${name} -> ${content}`;
-
-        } else if (action === 'UPDATE') {
-            if (!content) throw new Error('UPDATE 操作缺少 content 参数');
-            const recordsResult = await dnsProvider.listRecords(domainRecord.name);
-            if (!recordsResult.success || !recordsResult.data || recordsResult.data.length === 0) {
-                throw new Error('未在云端找到要更新的记录');
-            }
-            // 需要查找对应的记录 ID
-            const targetRecord = recordsResult.data.find(r => r.type === type && (r.name === name || r.name === `${name}.${domainRecord.name}`));
-            if (!targetRecord) throw new Error('未在云端找到要更新的具体记录');
-            const remoteId = targetRecord.id;
-            apiResult = await dnsProvider.updateRecord(domainRecord.name, remoteId.toString(), {
-                type, name, content, ttl: ttl || 600, priority: priority || 10
-            });
-            detailsStr = `Updated ${type} record ${name} -> ${content}`;
-
-        } else if (action === 'DELETE') {
-            const recordsResult = await dnsProvider.listRecords(domainRecord.name);
-            if (!recordsResult.success || !recordsResult.data || recordsResult.data.length === 0) {
-                throw new Error('未在云端找到要删除的记录');
-            }
-            const targetRecord = recordsResult.data.find(r => r.type === type && (r.name === name || r.name === `${name}.${domainRecord.name}`));
-            if (!targetRecord) throw new Error('未在云端找到要删除的具体记录');
-            const remoteId = targetRecord.id;
-            apiResult = await dnsProvider.deleteRecord(domainRecord.name, remoteId.toString());
-            detailsStr = `Deleted ${type} record ${name}`;
-
-        } else if (action === 'QUERY') {
-            const recordsResult = await dnsProvider.listRecords(domainRecord.name);
-            return NextResponse.json({ success: true, data: recordsResult.data });
-        } else {
-            throw new Error(`不支持的操作类型：${action}`);
-        }
-
-        if (!apiResult.success) {
-            throw new Error(`云端服务商 API 错误: ${apiResult.error}`);
-        }
-
-        // 记录审计日志
-        await db.insert(operationLogs).values({
-            action: `AI_${action}`,
-            entityType: 'domain',
-            entityId: domainRecord.id,
-            details: detailsStr,
-            status: 'success',
-            createdBy: 'ai_magic',
-        });
-
-        return NextResponse.json({
-            success: true,
-            data: { message: `操作成功：${detailsStr}` },
-        });
-
-    } catch (error) {
-        console.error('AI action execution error:', error);
-        return NextResponse.json(
-            { success: false, error: error instanceof Error ? error.message : '执行失败' },
-            { status: 500 }
-        );
+    if (!action || !domain || !type || !name) {
+      return NextResponse.json({
+        success: false,
+        code: 'VALIDATION_ERROR',
+        messageCn: '参数不完整',
+        messageEn: 'Missing required parameters',
+      }, { status: 400 });
     }
+
+    // 查找域名（支持精确匹配 + 父域名回退）
+    const domainEntity = await findDomainByName(domain);
+    if (!domainEntity) {
+      return NextResponse.json({
+        success: false,
+        code: 'NOT_FOUND',
+        messageCn: `域名 ${domain} 未找到，请先同步`,
+        messageEn: `Domain ${domain} not found, please sync first`,
+      }, { status: 404 });
+    }
+
+    const context: AuditContext = {
+      source: 'ai',
+      actor: 'ai-magic',
+      requestId: crypto.randomUUID?.() ?? `ai-${Date.now()}`,
+    };
+
+    if (action === 'CREATE') {
+      if (!content) {
+        throw new ValidationError('CREATE 操作缺少 content', 'CREATE action requires content');
+      }
+      const input: CreateRecordInput = {
+        domainId: domainEntity.id,
+        type,
+        name,
+        content,
+        ttl: ttl ?? 600,
+        priority: priority ?? null,
+        proxied,
+      };
+      const result = await createRecord(input, context);
+      return NextResponse.json({
+        success: true,
+        data: { message: `创建成功：${type} ${name} -> ${content}`, record: result.record },
+      });
+    }
+
+    if (action === 'UPDATE') {
+      if (!content) {
+        throw new ValidationError('UPDATE 操作缺少 content', 'UPDATE action requires content');
+      }
+      // 查找本地记录（按 domainId + type + name 匹配）
+      const [localRecord] = await db
+        .select()
+        .from(dnsRecords)
+        .where(
+          and(
+            eq(dnsRecords.domainId, domainEntity.id),
+            eq(dnsRecords.type, type.toUpperCase()),
+            eq(dnsRecords.name, name),
+            eq(dnsRecords.isActive, true)
+          )
+        )
+        .limit(1);
+
+      if (!localRecord) {
+        return NextResponse.json({
+          success: false,
+          code: 'NOT_FOUND',
+          messageCn: `未在本地找到要更新的记录：${type} ${name}`,
+          messageEn: `Record not found locally to update: ${type} ${name}`,
+        }, { status: 404 });
+      }
+
+      const changes: UpdateRecordInput = {
+        type,
+        name,
+        content,
+        ttl: ttl ?? undefined,
+        priority: priority ?? undefined,
+        proxied,
+      };
+      const result = await updateRecord(localRecord.id, changes, context);
+      return NextResponse.json({
+        success: true,
+        data: { message: `更新成功：${type} ${name} -> ${content}`, record: result.record },
+      });
+    }
+
+    if (action === 'DELETE') {
+      // 查找本地记录
+      const [localRecord] = await db
+        .select()
+        .from(dnsRecords)
+        .where(
+          and(
+            eq(dnsRecords.domainId, domainEntity.id),
+            eq(dnsRecords.type, type.toUpperCase()),
+            eq(dnsRecords.name, name),
+            eq(dnsRecords.isActive, true)
+          )
+        )
+        .limit(1);
+
+      if (!localRecord) {
+        return NextResponse.json({
+          success: false,
+          code: 'NOT_FOUND',
+          messageCn: `未在本地找到要删除的记录：${type} ${name}`,
+          messageEn: `Record not found locally to delete: ${type} ${name}`,
+        }, { status: 404 });
+      }
+
+      await deleteRecord(localRecord.id, context);
+      return NextResponse.json({
+        success: true,
+        data: { message: `删除成功：${type} ${name}` },
+      });
+    }
+
+    if (action === 'QUERY') {
+      const records = await listRecords(domainEntity.id);
+      return NextResponse.json({ success: true, data: records });
+    }
+
+    return NextResponse.json({
+      success: false,
+      code: 'VALIDATION_ERROR',
+      messageCn: `不支持的操作类型：${action}`,
+      messageEn: `Unsupported action: ${action}`,
+    }, { status: 400 });
+  } catch (error) {
+    const err = error instanceof DnsServiceError ? error : normalizeError(error);
+    return NextResponse.json(err.toPayload(), { status: err.httpStatus() });
+  }
 }

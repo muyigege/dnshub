@@ -80,6 +80,39 @@ CREATE TABLE IF NOT EXISTS \`operation_logs\` (
 	\`created_at\` text DEFAULT (CURRENT_TIMESTAMP) NOT NULL
 );
 `).catch((err) => console.error("Failed to auto-provision db tables:", err));
+
+    // Migration: add extended columns to operation_logs (idempotent)
+    // SQLite doesn't support ADD COLUMN IF NOT EXISTS, so we catch the "duplicate column" error per statement.
+    const migrationColumns: Array<[string, string]> = [
+      ['batch_id', 'text'],
+      ['parent_operation_id', 'integer'],
+      ['source', "text DEFAULT 'system' NOT NULL"],
+      ['actor', 'text'],
+      ['client_name', 'text'],
+      ['request_id', 'text'],
+      ['idempotency_key', 'text'],
+      ['provider_id', 'integer'],
+      ['domain_id', 'integer'],
+      ['record_id', 'integer'],
+      ['before_snapshot', 'text'],
+      ['requested_snapshot', 'text'],
+      ['after_snapshot', 'text'],
+      ['started_at', 'text'],
+      ['completed_at', 'text'],
+      ['rollback_of', 'integer'],
+      ['rolled_back_at', 'text'],
+      ['error_code', 'text'],
+    ];
+    for (const [col, type] of migrationColumns) {
+      _client.execute(`ALTER TABLE \`operation_logs\` ADD COLUMN \`${col}\` ${type}`)
+        .catch((err: unknown) => {
+          // Ignore "duplicate column name" errors (column already exists)
+          const msg = err instanceof Error ? err.message : String(err);
+          if (!msg.includes('duplicate column') && !msg.toLowerCase().includes('already exists')) {
+            console.error(`Failed to migrate operation_logs.${col}:`, err);
+          }
+        });
+    }
   }
   return _client;
 }

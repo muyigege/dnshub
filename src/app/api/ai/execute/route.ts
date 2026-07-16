@@ -1,848 +1,310 @@
 import { NextRequest, NextResponse } from 'next/server';
+import {
+  createRecord,
+  updateRecord,
+  deleteRecord,
+  listRecords,
+  batchMutateRecords,
+  findDomainByName,
+  generateBatchId,
+  DnsServiceError,
+  normalizeError,
+  ValidationError,
+  type AuditContext,
+  type CreateRecordInput,
+  type UpdateRecordInput,
+  type BatchMutationItem,
+} from '@/lib/services';
 import { db } from '@/lib/db/connection';
-import { dnsRecords, dnsProviders, domains, operationLogs } from '@/lib/db/schema';
-import { decryptJSON } from '@/lib/encryption';
-import { DNSProviderFactory, ProviderType } from '@/lib/providers/base';
+import { dnsRecords } from '@/lib/db/schema';
 import { eq, and } from 'drizzle-orm';
-import { DNSAction, isBatchInstruction, DNSInstruction } from '@/lib/ai/parser';
 
 /**
  * POST /api/ai/execute
  * 执行 AI 解析后的 DNS 操作（支持单条和批量）
+ *
+ * 已修复（vs 旧代码）：
+ * - 单条和批量两套重复 CRUD 逻辑 → 统一委托 Service 层（消除约 400 行重复代码）
+ * - 父域名回退逻辑分散 → 用 Service 层 findDomainByName 统一处理
+ * - 审计日志格式不统一 → Service 层统一写入
  */
 export async function POST(request: NextRequest) {
-
   try {
     const body = await request.json();
 
-    // 检查是否是批量指令
+    // 批量指令
     if (body.batch === true && Array.isArray(body.instructions) && body.instructions.length > 0) {
       return await executeBatchInstruction(body.instructions);
     }
 
-    // 解析单条指令
-    let { action, domain, type, name, content, oldContent, ttl = 600, priority } = body;
+    // 单条指令
+    const { action, domain, type, name, content, oldContent, ttl = 600, priority, proxied } = body;
 
-    // 验证必填字段
     if (!action || !domain || !type) {
-      return NextResponse.json(
-        { success: false, error: 'action, domain, and type are required' },
-        { status: 400 }
-      );
+      return NextResponse.json({
+        success: false,
+        code: 'VALIDATION_ERROR',
+        messageCn: '缺少 action、domain 或 type',
+        messageEn: 'action, domain, and type are required',
+      }, { status: 400 });
     }
 
-    // 查找域名
-    let domainRecord = null;
+    // 查找域名（支持精确匹配 + 父域名回退 + 子域名名拼接）
+    let resolvedName = name;
+    const domainEntity = await findDomainByName(domain);
+    if (!domainEntity) {
+      return NextResponse.json({
+        success: false,
+        code: 'NOT_FOUND',
+        messageCn: `域名 ${domain} 未找到，请先同步`,
+        messageEn: `Domain "${domain}" not found, please sync first`,
+      }, { status: 404 });
+    }
 
-    // 首先尝试精确匹配
-    console.log('[AI Execute] Looking for domain:', domain);
-    [domainRecord] = await db.select().from(domains).where(eq(domains.name, domain));
-    console.log('[AI Execute] Exact match result:', domainRecord ? `Found (id=${domainRecord.id}, name=${domainRecord.name})` : 'Not found');
-
-    // 如果找不到，尝试查找父域名（例如 opai.bmxdr.de -> bmxdr.de）
-    if (!domainRecord) {
-      const parts = domain.split('.');
-      console.log('[AI Execute] Domain parts:', parts, `Length: ${parts.length}`);
-      if (parts.length > 2) {
-        const parentDomain = parts.slice(1).join('.');
-        console.log('[AI Execute] Looking for parent domain:', parentDomain);
-
-        // 先查询所有域名，看看有哪些
-        const allDoms = await db.select().from(domains).limit(5);
-        console.log('[AI Execute] All domains sample:', allDoms.map((d: any) => d.name));
-
-        [domainRecord] = await db.select().from(domains).where(eq(domains.name, parentDomain));
-        console.log('[AI Execute] Parent match result:', domainRecord ? `Found (id=${domainRecord.id}, name=${domainRecord.name})` : 'Not found');
-
-        if (domainRecord) {
-          // 如果找到父域名，提取子域名作为记录名称
-          const subdomain = parts[0];
-          console.log('[AI Execute] Subdomain:', subdomain, 'Original name:', name);
-          // 如果 name 是 '@'，则替换为子域名
-          if (name === '@' || !name) {
-            name = subdomain;
-          } else {
-            // 否则，拼接子域名（例如 www + opai = opai.www）
-            name = `${subdomain}.${name}`;
-          }
-          console.log('[AI Execute] Updated name:', name);
-        }
+    // 如果找到的是父域名，且原 domain 是子域名，需要拼接子域名名
+    if (domainEntity.name !== domain) {
+      const sub = domain.slice(0, domain.length - domainEntity.name.length - 1);
+      if (sub) {
+        resolvedName = name === '@' || !name ? sub : `${sub}.${name}`;
       }
     }
 
-    if (!domainRecord) {
-      // 获取所有可用域名列表作为提示
-      const allDomains = await db.select({ name: domains.name }).from(domains).limit(10);
-      const availableDomains = allDomains.map((d: any) => d.name).join(', ');
-      const parts = domain.split('.');
-      const parentDomain = parts.length > 2 ? parts.slice(1).join('.') : 'N/A';
-
-      return NextResponse.json(
-        {
-          success: false,
-          error: `Domain "${domain}" not found in database. Parent candidate: "${parentDomain}". Available domains: ${availableDomains}. Please sync the domain first.`,
-        },
-        { status: 404 }
-      );
-    }
-
-    // 查找服务商
-    const [provider] = await db.select().from(dnsProviders).where(eq(dnsProviders.id, domainRecord.providerId));
-
-    if (!provider) {
-      return NextResponse.json({ success: false, error: 'Provider not found' }, { status: 404 });
-    }
-
-    // 解密凭证
-    const credentials = decryptJSON(provider.credentials);
-
-    // 创建 Provider 实例
-    const dnsProvider = DNSProviderFactory.create(provider.type as ProviderType, credentials);
-
-    // 根据操作类型执行
-    let result: any;
+    const context: AuditContext = {
+      source: 'ai',
+      actor: 'ai',
+      requestId: crypto.randomUUID?.() ?? `ai-${Date.now()}`,
+    };
 
     switch (action) {
-      case DNSAction.CREATE: {
-        // 验证必填字段
-        if (!name || !content) {
-          return NextResponse.json(
-            { success: false, error: 'name and content are required for CREATE action' },
-            { status: 400 }
-          );
+      case 'CREATE': {
+        if (!resolvedName || !content) {
+          return NextResponse.json({
+            success: false,
+            code: 'VALIDATION_ERROR',
+            messageCn: 'CREATE 操作缺少 name 或 content',
+            messageEn: 'name and content are required for CREATE',
+          }, { status: 400 });
         }
-
-        // 调用 Provider API 创建记录
-        const createResult = await dnsProvider.addRecord(domain, {
+        const input: CreateRecordInput = {
+          domainId: domainEntity.id,
           type,
-          name,
+          name: resolvedName,
           content,
           ttl,
-          priority,
+          priority: priority ?? null,
+          proxied,
+        };
+        const result = await createRecord(input, context);
+        return NextResponse.json({
+          success: true,
+          data: result.record,
+          message: `成功创建 ${type} 记录`,
         });
-
-        if (!createResult.success || !createResult.data) {
-          // 记录失败日志
-          await db.insert(operationLogs).values({
-            action: 'CREATE',
-            entityType: 'record',
-            entityId: 0,
-            details: JSON.stringify({ domain, type, name, content, ttl, priority }),
-            status: 'failed',
-            errorMessage: createResult.error || 'Failed to create record',
-            createdBy: 'ai',
-          });
-
-          return NextResponse.json(
-            { success: false, error: createResult.error || 'Failed to create record' },
-            { status: 500 }
-          );
-        }
-
-        // 保存到数据库
-        const [created] = await db
-          .insert(dnsRecords)
-          .values({
-            domainId: domainRecord.id,
-            type,
-            name,
-            content,
-            ttl,
-            priority,
-            providerRecordId: createResult.data.id,
-            isActive: true,
-          })
-          .returning();
-
-        // 记录成功日志
-        await db.insert(operationLogs).values({
-          action: 'CREATE',
-          entityType: 'record',
-          entityId: created.id,
-          details: JSON.stringify({
-            domain,
-            type,
-            name,
-            content,
-            ttl,
-            priority,
-          }),
-          status: 'success',
-          createdBy: 'ai',
-        });
-
-        result = { success: true, data: created, message: `成功创建 ${type} 记录` };
-        break;
       }
 
-      case DNSAction.UPDATE: {
-        // 验证必填字段
-        if (!name || !content) {
-          return NextResponse.json(
-            { success: false, error: 'name and content are required for UPDATE action' },
-            { status: 400 }
-          );
+      case 'UPDATE': {
+        if (!resolvedName || !content) {
+          return NextResponse.json({
+            success: false,
+            code: 'VALIDATION_ERROR',
+            messageCn: 'UPDATE 操作缺少 name 或 content',
+            messageEn: 'name and content are required for UPDATE',
+          }, { status: 400 });
         }
-
-        // 查找现有记录（使用 oldContent 匹配）
+        // 查找本地记录（支持 oldContent 精确匹配）
         const conditions = [
-          eq(dnsRecords.domainId, domainRecord.id),
-          eq(dnsRecords.type, type),
-          eq(dnsRecords.name, name),
+          eq(dnsRecords.domainId, domainEntity.id),
+          eq(dnsRecords.type, type.toUpperCase()),
+          eq(dnsRecords.name, resolvedName),
         ];
-
-        // 如果提供了 oldContent，使用它来精确匹配
         if (oldContent) {
           conditions.push(eq(dnsRecords.content, oldContent));
         }
+        const [localRecord] = await db.select().from(dnsRecords).where(and(...conditions)).limit(1);
 
-        const [existingRecord] = await db
-          .select()
-          .from(dnsRecords)
-          .where(and(...conditions));
-
-        if (!existingRecord) {
-          return NextResponse.json(
-            {
-              success: false,
-              error: oldContent
-                ? `Record not found. No matching record with oldContent="${oldContent}"`
-                : `Record not found. Please specify the old content for confirmation.`,
-            },
-            { status: 404 }
-          );
+        if (!localRecord) {
+          return NextResponse.json({
+            success: false,
+            code: 'NOT_FOUND',
+            messageCn: oldContent
+              ? `未找到匹配的记录（oldContent="${oldContent}"）`
+              : `未找到记录，请指定 oldContent 用于确认`,
+            messageEn: oldContent
+              ? `Record not found with oldContent="${oldContent}"`
+              : `Record not found, please specify old content for confirmation`,
+          }, { status: 404 });
         }
 
-        // 调用 Provider API 更新记录
-        const updateResult = await dnsProvider.updateRecord(domain, existingRecord.providerRecordId!, {
+        const changes: UpdateRecordInput = {
           type,
-          name,
+          name: resolvedName,
           content,
           ttl,
-          priority,
-        });
-
-        if (!updateResult.success || !updateResult.data) {
-          // 记录失败日志
-          await db.insert(operationLogs).values({
-            action: 'UPDATE',
-            entityType: 'record',
-            entityId: existingRecord.id,
-            details: JSON.stringify({
-              domain,
-              type,
-              name,
-              oldContent: existingRecord.content,
-              newContent: content,
-              ttl,
-              priority,
-            }),
-            status: 'failed',
-            errorMessage: updateResult.error || 'Failed to update record',
-            createdBy: 'ai',
-          });
-
-          return NextResponse.json(
-            { success: false, error: updateResult.error || 'Failed to update record' },
-            { status: 500 }
-          );
-        }
-
-        // 更新数据库
-        const [updated] = await db
-          .update(dnsRecords)
-          .set({
-            type,
-            name,
-            content,
-            ttl,
-            priority,
-            updatedAt: new Date().toISOString(),
-          })
-          .where(eq(dnsRecords.id, existingRecord.id))
-          .returning();
-
-        // 记录成功日志
-        await db.insert(operationLogs).values({
-          action: 'UPDATE',
-          entityType: 'record',
-          entityId: updated.id,
-          details: JSON.stringify({
-            domain,
-            type,
-            name,
-            oldContent: existingRecord.content,
-            newContent: content,
-            ttl,
-            priority,
-          }),
-          status: 'success',
-          createdBy: 'ai',
-        });
-
-        result = {
-          success: true,
-          data: updated,
-          message: `成功更新 ${type} 记录`,
+          priority: priority ?? undefined,
+          proxied,
         };
-        break;
+        const result = await updateRecord(localRecord.id, changes, context);
+        return NextResponse.json({
+          success: true,
+          data: result.record,
+          message: `成功更新 ${type} 记录`,
+        });
       }
 
-      case DNSAction.DELETE: {
-        // 验证必填字段
-        if (!name) {
-          return NextResponse.json(
-            { success: false, error: 'name is required for DELETE action' },
-            { status: 400 }
-          );
-        }
-
-        // 查找记录
+      case 'DELETE': {
+        // 查找本地记录
         const conditions = [
-          eq(dnsRecords.domainId, domainRecord.id),
-          eq(dnsRecords.type, type),
-          eq(dnsRecords.name, name),
+          eq(dnsRecords.domainId, domainEntity.id),
+          eq(dnsRecords.type, type.toUpperCase()),
         ];
+        if (resolvedName) conditions.push(eq(dnsRecords.name, resolvedName));
+        if (oldContent) conditions.push(eq(dnsRecords.content, oldContent));
+        const [localRecord] = await db.select().from(dnsRecords).where(and(...conditions)).limit(1);
 
-        // 如果提供了 content，使用它来精确匹配
-        if (content) {
-          conditions.push(eq(dnsRecords.content, content));
+        if (!localRecord) {
+          return NextResponse.json({
+            success: false,
+            code: 'NOT_FOUND',
+            messageCn: `未找到要删除的记录：${type} ${resolvedName ?? ''}`,
+            messageEn: `Record not found to delete: ${type} ${resolvedName ?? ''}`,
+          }, { status: 404 });
         }
 
-        const [existingRecord] = await db
-          .select()
-          .from(dnsRecords)
-          .where(and(...conditions));
-
-        if (!existingRecord) {
-          return NextResponse.json(
-            {
-              success: false,
-              error: `Record not found. No matching ${type} record with name="${name}"${content ? ` and content="${content}"` : ''}`,
-            },
-            { status: 404 }
-          );
-        }
-
-        // 调用 Provider API 删除记录
-        const deleteResult = await dnsProvider.deleteRecord(domain, existingRecord.providerRecordId!);
-
-        if (!deleteResult.success) {
-          // 记录失败日志
-          await db.insert(operationLogs).values({
-            action: 'DELETE',
-            entityType: 'record',
-            entityId: existingRecord.id,
-            details: JSON.stringify({
-              domain,
-              type,
-              name,
-              content: existingRecord.content,
-            }),
-            status: 'failed',
-            errorMessage: deleteResult.error || 'Failed to delete record',
-            createdBy: 'ai',
-          });
-
-          return NextResponse.json(
-            { success: false, error: deleteResult.error || 'Failed to delete record' },
-            { status: 500 }
-          );
-        }
-
-        // 记录成功日志
-        await db.insert(operationLogs).values({
-          action: 'DELETE',
-          entityType: 'record',
-          entityId: existingRecord.id,
-          details: JSON.stringify({
-            domain,
-            type,
-            name,
-            content: existingRecord.content,
-          }),
-          status: 'success',
-          createdBy: 'ai',
-        });
-
-        // 删除数据库记录
-        await db.delete(dnsRecords).where(eq(dnsRecords.id, existingRecord.id));
-
-        result = {
+        await deleteRecord(localRecord.id, context);
+        return NextResponse.json({
           success: true,
           message: `成功删除 ${type} 记录`,
-        };
-        break;
+        });
       }
 
-      case DNSAction.QUERY: {
-        // 查询记录
-        const conditions = [eq(dnsRecords.domainId, domainRecord.id)];
-
-        if (type) {
-          conditions.push(eq(dnsRecords.type, type));
-        }
-        if (name) {
-          conditions.push(eq(dnsRecords.name, name));
-        }
-        if (content) {
-          conditions.push(eq(dnsRecords.content, content));
-        }
-
-        const records = await db.select().from(dnsRecords).where(and(...conditions));
-
-        result = {
-          success: true,
-          data: records,
-          message: `查询到 ${records.length} 条记录`,
-        };
-        break;
+      case 'QUERY': {
+        const records = await listRecords(domainEntity.id);
+        return NextResponse.json({ success: true, data: records });
       }
 
       default:
-        return NextResponse.json(
-          { success: false, error: `Unsupported action: ${action}` },
-          { status: 400 }
-        );
+        return NextResponse.json({
+          success: false,
+          code: 'VALIDATION_ERROR',
+          messageCn: `不支持的操作：${action}`,
+          messageEn: `Unsupported action: ${action}`,
+        }, { status: 400 });
     }
-
-    return NextResponse.json(result);
   } catch (error) {
-    console.error('Execute AI instruction error:', error);
-    return NextResponse.json(
-      { success: false, error: error instanceof Error ? error.message : 'Internal server error' },
-      { status: 500 }
-    );
+    const err = error instanceof DnsServiceError ? error : normalizeError(error);
+    return NextResponse.json(err.toPayload(), { status: err.httpStatus() });
   }
 }
 
 /**
- * 执行批量 DNS 指令
+ * 批量执行指令。
+ * 统一委托给 Service 层的 batchMutateRecords，支持部分失败。
  */
-async function executeBatchInstruction(instructions: DNSInstruction[]): Promise<NextResponse> {
-  const results = [];
-  let successCount = 0;
-  let failureCount = 0;
+async function executeBatchInstruction(instructions: any[]) {
+  const batchId = generateBatchId();
+  const context: AuditContext = {
+    source: 'ai',
+    actor: 'ai-batch',
+    batchId,
+    requestId: crypto.randomUUID?.() ?? `ai-batch-${Date.now()}`,
+  };
 
-  for (let i = 0; i < instructions.length; i++) {
-    const instruction = instructions[i];
-    const { action, domain, type, name, content, oldContent, ttl = 600, priority } = instruction;
+  // 将指令转换为 BatchMutationItem
+  const items: BatchMutationItem[] = [];
 
-    console.log(`[AI Execute Batch] Processing ${i + 1}/${instructions.length}:`, {
-      action,
-      domain,
-      type,
-      name,
-      content,
-    });
+  for (const inst of instructions) {
+    const { action, domain, type, name, content, oldContent, ttl = 600, priority, proxied } = inst;
+    if (!action || !domain || !type) {
+      items.push({
+        action: action?.toLowerCase() === 'create' ? 'create' : action?.toLowerCase() === 'update' ? 'update' : 'delete',
+      });
+      continue;
+    }
 
-    try {
-      // 查找域名
-      let domainRecord = null;
+    const domainEntity = await findDomainByName(domain);
+    if (!domainEntity) {
+      items.push({
+        action: action.toLowerCase() === 'create' ? 'create' : action.toLowerCase() === 'update' ? 'update' : 'delete',
+      });
+      continue;
+    }
 
-      // 首先尝试精确匹配
-      [domainRecord] = await db.select().from(domains).where(eq(domains.name, domain));
-
-      // 如果找不到，尝试查找父域名
-      if (!domainRecord) {
-        const parts = domain.split('.');
-        if (parts.length > 2) {
-          const parentDomain = parts.slice(1).join('.');
-          [domainRecord] = await db.select().from(domains).where(eq(domains.name, parentDomain));
-
-          if (domainRecord) {
-            const subdomain = parts[0];
-            // 如果 name 是 '@'，则替换为子域名
-            if (name === '@' || !name) {
-              (instruction as any).name = subdomain;
-            } else {
-              // 否则，拼接子域名
-              (instruction as any).name = `${subdomain}.${name}`;
-            }
-          }
-        }
+    // 子域名名拼接
+    let resolvedName = name;
+    if (domainEntity.name !== domain) {
+      const sub = domain.slice(0, domain.length - domainEntity.name.length - 1);
+      if (sub) {
+        resolvedName = name === '@' || !name ? sub : `${sub}.${name}`;
       }
+    }
 
-      if (!domainRecord) {
-        const allDomains = await db.select({ name: domains.name }).from(domains).limit(10);
-        const availableDomains = allDomains.map((d: any) => d.name).join(', ');
-
-        results.push({
-          index: i + 1,
-          success: false,
-          error: `Domain "${domain}" not found. Available: ${availableDomains}`,
-          instruction,
-        });
-        failureCount++;
+    const lowerAction = action.toLowerCase();
+    if (lowerAction === 'create') {
+      items.push({
+        action: 'create',
+        input: {
+          domainId: domainEntity.id,
+          type,
+          name: resolvedName,
+          content,
+          ttl,
+          priority: priority ?? null,
+          proxied,
+        },
+      });
+    } else if (lowerAction === 'update') {
+      // 找本地记录
+      const conditions = [
+        eq(dnsRecords.domainId, domainEntity.id),
+        eq(dnsRecords.type, type.toUpperCase()),
+      ];
+      if (resolvedName) conditions.push(eq(dnsRecords.name, resolvedName));
+      if (oldContent) conditions.push(eq(dnsRecords.content, oldContent));
+      const [localRecord] = await db.select().from(dnsRecords).where(and(...conditions)).limit(1);
+      if (!localRecord) {
+        items.push({ action: 'update' });
         continue;
       }
-
-      // 查找服务商
-      const [provider] = await db.select().from(dnsProviders).where(eq(dnsProviders.id, domainRecord.providerId));
-
-      if (!provider) {
-        results.push({
-          index: i + 1,
-          success: false,
-          error: 'Provider not found',
-          instruction,
-        });
-        failureCount++;
+      items.push({
+        action: 'update',
+        recordId: localRecord.id,
+        changes: {
+          type,
+          name: resolvedName,
+          content,
+          ttl,
+          priority: priority ?? undefined,
+          proxied,
+        },
+      });
+    } else if (lowerAction === 'delete') {
+      const conditions = [
+        eq(dnsRecords.domainId, domainEntity.id),
+        eq(dnsRecords.type, type.toUpperCase()),
+      ];
+      if (resolvedName) conditions.push(eq(dnsRecords.name, resolvedName));
+      if (oldContent) conditions.push(eq(dnsRecords.content, oldContent));
+      const [localRecord] = await db.select().from(dnsRecords).where(and(...conditions)).limit(1);
+      if (!localRecord) {
+        items.push({ action: 'delete' });
         continue;
       }
-
-      // 解密凭证
-      const credentials = decryptJSON(provider.credentials);
-
-      // 创建 Provider 实例
-      const dnsProvider = DNSProviderFactory.create(provider.type as ProviderType, credentials);
-
-      // 根据操作类型执行
-      let result: any;
-
-      switch (action) {
-        case DNSAction.CREATE: {
-          if (!name || !content) {
-            results.push({
-              index: i + 1,
-              success: false,
-              error: 'name and content are required for CREATE action',
-              instruction,
-            });
-            failureCount++;
-            continue;
-          }
-
-          const createResult = await dnsProvider.addRecord(domain, {
-            type,
-            name: instruction.name || name,
-            content,
-            ttl,
-            priority,
-          });
-
-          if (!createResult.success || !createResult.data) {
-            await db.insert(operationLogs).values({
-              action: 'CREATE',
-              entityType: 'record',
-              entityId: 0,
-              details: JSON.stringify({ domain, type, name: instruction.name || name, content, ttl, priority }),
-              status: 'failed',
-              errorMessage: createResult.error || 'Failed to create record',
-              createdBy: 'ai',
-            });
-
-            results.push({
-              index: i + 1,
-              success: false,
-              error: createResult.error || 'Failed to create record',
-              instruction,
-            });
-            failureCount++;
-            continue;
-          }
-
-          const [created] = await db
-            .insert(dnsRecords)
-            .values({
-              domainId: domainRecord.id,
-              type,
-              name: instruction.name || name,
-              content,
-              ttl,
-              priority,
-              providerRecordId: createResult.data.id,
-              isActive: true,
-            })
-            .returning();
-
-          await db.insert(operationLogs).values({
-            action: 'CREATE',
-            entityType: 'record',
-            entityId: created.id,
-            details: JSON.stringify({
-              domain,
-              type,
-              name: instruction.name || name,
-              content,
-              ttl,
-              priority,
-            }),
-            status: 'success',
-            createdBy: 'ai',
-          });
-
-          result = { success: true, data: created, message: `成功创建 ${type} 记录` };
-          break;
-        }
-
-        case DNSAction.UPDATE: {
-          if (!name || !content) {
-            results.push({
-              index: i + 1,
-              success: false,
-              error: 'name and content are required for UPDATE action',
-              instruction,
-            });
-            failureCount++;
-            continue;
-          }
-
-          const conditions = [
-            eq(dnsRecords.domainId, domainRecord.id),
-            eq(dnsRecords.type, type),
-            eq(dnsRecords.name, instruction.name || name),
-          ];
-
-          if (oldContent) {
-            conditions.push(eq(dnsRecords.content, oldContent));
-          }
-
-          const [existingRecord] = await db
-            .select()
-            .from(dnsRecords)
-            .where(and(...conditions));
-
-          if (!existingRecord) {
-            results.push({
-              index: i + 1,
-              success: false,
-              error: oldContent
-                ? `Record not found. No matching record with oldContent="${oldContent}"`
-                : `Record not found. Please specify the old content for confirmation.`,
-              instruction,
-            });
-            failureCount++;
-            continue;
-          }
-
-          const updateResult = await dnsProvider.updateRecord(domain, existingRecord.providerRecordId!, {
-            type,
-            name: instruction.name || name,
-            content,
-            ttl,
-            priority,
-          });
-
-          if (!updateResult.success || !updateResult.data) {
-            await db.insert(operationLogs).values({
-              action: 'UPDATE',
-              entityType: 'record',
-              entityId: existingRecord.id,
-              details: JSON.stringify({
-                domain,
-                type,
-                name: instruction.name || name,
-                oldContent: existingRecord.content,
-                newContent: content,
-                ttl,
-                priority,
-              }),
-              status: 'failed',
-              errorMessage: updateResult.error || 'Failed to update record',
-              createdBy: 'ai',
-            });
-
-            results.push({
-              index: i + 1,
-              success: false,
-              error: updateResult.error || 'Failed to update record',
-              instruction,
-            });
-            failureCount++;
-            continue;
-          }
-
-          const [updated] = await db
-            .update(dnsRecords)
-            .set({
-              type,
-              name: instruction.name || name,
-              content,
-              ttl,
-              priority,
-              updatedAt: new Date().toISOString(),
-            })
-            .where(eq(dnsRecords.id, existingRecord.id))
-            .returning();
-
-          await db.insert(operationLogs).values({
-            action: 'UPDATE',
-            entityType: 'record',
-            entityId: updated.id,
-            details: JSON.stringify({
-              domain,
-              type,
-              name: instruction.name || name,
-              oldContent: existingRecord.content,
-              newContent: content,
-              ttl,
-              priority,
-            }),
-            status: 'success',
-            createdBy: 'ai',
-          });
-
-          result = {
-            success: true,
-            data: updated,
-            message: `成功更新 ${type} 记录`,
-          };
-          break;
-        }
-
-        case DNSAction.DELETE: {
-          if (!name) {
-            results.push({
-              index: i + 1,
-              success: false,
-              error: 'name is required for DELETE action',
-              instruction,
-            });
-            failureCount++;
-            continue;
-          }
-
-          const conditions = [
-            eq(dnsRecords.domainId, domainRecord.id),
-            eq(dnsRecords.type, type),
-            eq(dnsRecords.name, instruction.name || name),
-          ];
-
-          if (content) {
-            conditions.push(eq(dnsRecords.content, content));
-          }
-
-          const [existingRecord] = await db
-            .select()
-            .from(dnsRecords)
-            .where(and(...conditions));
-
-          if (!existingRecord) {
-            results.push({
-              index: i + 1,
-              success: false,
-              error: `Record not found. No matching ${type} record with name="${instruction.name || name}"${content ? ` and content="${content}"` : ''}`,
-              instruction,
-            });
-            failureCount++;
-            continue;
-          }
-
-          const deleteResult = await dnsProvider.deleteRecord(domain, existingRecord.providerRecordId!);
-
-          if (!deleteResult.success) {
-            await db.insert(operationLogs).values({
-              action: 'DELETE',
-              entityType: 'record',
-              entityId: existingRecord.id,
-              details: JSON.stringify({
-                domain,
-                type,
-                name: instruction.name || name,
-                content: existingRecord.content,
-              }),
-              status: 'failed',
-              errorMessage: deleteResult.error || 'Failed to delete record',
-              createdBy: 'ai',
-            });
-
-            results.push({
-              index: i + 1,
-              success: false,
-              error: deleteResult.error || 'Failed to delete record',
-              instruction,
-            });
-            failureCount++;
-            continue;
-          }
-
-          await db.insert(operationLogs).values({
-            action: 'DELETE',
-            entityType: 'record',
-            entityId: existingRecord.id,
-            details: JSON.stringify({
-              domain,
-              type,
-              name: instruction.name || name,
-              content: existingRecord.content,
-            }),
-            status: 'success',
-            createdBy: 'ai',
-          });
-
-          await db.delete(dnsRecords).where(eq(dnsRecords.id, existingRecord.id));
-
-          result = {
-            success: true,
-            message: `成功删除 ${type} 记录`,
-          };
-          break;
-        }
-
-        case DNSAction.QUERY: {
-          const conditions = [eq(dnsRecords.domainId, domainRecord.id)];
-
-          if (type) {
-            conditions.push(eq(dnsRecords.type, type));
-          }
-          const effectiveName = instruction.name || name;
-          if (effectiveName) {
-            conditions.push(eq(dnsRecords.name, effectiveName));
-          }
-          if (content) {
-            conditions.push(eq(dnsRecords.content, content));
-          }
-
-          const records = await db.select().from(dnsRecords).where(and(...conditions));
-
-          result = {
-            success: true,
-            data: records,
-            message: `查询到 ${records.length} 条记录`,
-          };
-          break;
-        }
-
-        default:
-          results.push({
-            index: i + 1,
-            success: false,
-            error: `Unsupported action: ${action}`,
-            instruction,
-          });
-          failureCount++;
-          continue;
-      }
-
-      results.push({
-        index: i + 1,
-        success: result.success,
-        message: result.message,
-        data: result.data,
-        instruction,
+      items.push({
+        action: 'delete',
+        recordId: localRecord.id,
       });
-      successCount++;
-
-    } catch (error) {
-      console.error(`[AI Execute Batch] Error processing instruction ${i + 1}:`, error);
-      results.push({
-        index: i + 1,
-        success: false,
-        error: error instanceof Error ? error.message : 'Unknown error',
-        instruction,
-      });
-      failureCount++;
     }
   }
 
-  // 返回批量执行结果
+  const batchResult = await batchMutateRecords(items, context);
+
   return NextResponse.json({
-    success: failureCount === 0,
-    message: `批量执行完成：成功 ${successCount} 条，失败 ${failureCount} 条`,
+    success: batchResult.totalFailed === 0,
+    message: `批量执行完成：成功 ${batchResult.totalSuccess} 条，失败 ${batchResult.totalFailed} 条`,
+    batchId: batchResult.batchId,
     total: instructions.length,
-    successCount,
-    failureCount,
-    results,
+    successCount: batchResult.totalSuccess,
+    failureCount: batchResult.totalFailed,
+    results: batchResult.results,
   });
 }
