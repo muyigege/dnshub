@@ -53,7 +53,9 @@ ehthumbs.db
 output.log
 *.log
 *.log.*
-logs/
+/logs/
+# 不要忽略 Next.js 的 /logs 路由目录
+!src/app/logs/
 
 # Database
 *.db

@@ -16,6 +16,7 @@ export default function Navbar() {
     { nameKey: 'common.providers', href: '/providers' },
     { nameKey: 'common.domains', href: '/domains' },
     { nameKey: 'aiConfig.title', href: '/ai-config' },
+    { nameKey: 'common.logs', href: '/logs' },
   ];
 
   const handleExport = async () => {
