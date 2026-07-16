@@ -114,10 +114,12 @@ CREATE TABLE IF NOT EXISTS \`operation_logs\` (
         });
     }
 
-    // Migration: add proxied/proxiable columns to dns_records (idempotent)
+    // Migration: add proxied/proxiable/version columns to dns_records (idempotent)
+    // version 为乐观锁版本号，用于 updateRecord/deleteRecord 的 TOCTOU 并发保护
     const dnsRecordMigrationColumns: Array<[string, string]> = [
       ['proxied', 'integer'],
       ['proxiable', 'integer'],
+      ['version', 'integer DEFAULT 0 NOT NULL'],
     ];
     for (const [col, type] of dnsRecordMigrationColumns) {
       _client.execute(`ALTER TABLE \`dns_records\` ADD COLUMN \`${col}\` ${type}`)

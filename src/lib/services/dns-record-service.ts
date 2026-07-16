@@ -21,7 +21,7 @@
 
 import { db } from '@/lib/db/connection';
 import { dnsRecords, domains } from '@/lib/db/schema';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, sql } from 'drizzle-orm';
 import {
   createProviderInstanceForDomain,
   createProviderInstanceForDomainName,
@@ -51,6 +51,7 @@ import {
   normalizeError,
 } from './errors';
 import type { IDNSProvider, DNSRecordType, DNSRecordData } from '@/lib/providers/base';
+import { toRelativeRecordName } from '@/lib/providers/utils';
 
 // ============================================================
 // 类型定义
@@ -73,6 +74,9 @@ export interface UpdateRecordInput {
   ttl?: number;
   priority?: number | null;
   proxied?: boolean;
+  // 乐观锁：调用方传入读取时的 version，服务端据此检测并发修改。
+  // 不传则跳过版本校验（兼容现有调用方）。
+  expectedVersion?: number;
 }
 
 export interface RecordSnapshot {
@@ -89,6 +93,8 @@ export interface RecordSnapshot {
   proxied: boolean | null;
   // 该记录是否可被代理（Provider 返回的只读能力字段）
   proxiable: boolean | null;
+  // 乐观锁版本号，每次更新自增。调用方修改时应携带 expectedVersion 做 TOCTOU 保护
+  version: number;
 }
 
 export interface CreateRecordResult {
@@ -171,6 +177,7 @@ function toRecordSnapshot(row: typeof dnsRecords.$inferSelect): RecordSnapshot {
     isActive: row.isActive,
     proxied: row.proxied ?? null,
     proxiable: row.proxiable ?? null,
+    version: row.version ?? 0,
   };
 }
 
@@ -264,29 +271,104 @@ function providerErrorToServiceError(
   return normalizeError(err);
 }
 
+// ============================================================
+// Provider 调用：超时 + 重试 + 退避
+// ============================================================
+
+/** Provider 调用超时时间（毫秒） */
+const PROVIDER_TIMEOUT_MS = 30000;
+/** 最大重试次数（不含首次调用） */
+const PROVIDER_MAX_RETRIES = 3;
+
 /**
- * 调用 Provider 方法，统一错误转换。
+ * 判断错误是否可重试。
+ * 仅对限流（429）、服务不可用（503）、超时/网络错误重试。
+ * 认证、校验、冲突等错误不重试。
+ */
+function isRetryableError(err: DnsServiceError): boolean {
+  return (
+    err.code === 'PROVIDER_RATE_LIMIT' ||
+    err.code === 'PROVIDER_UNAVAILABLE' ||
+    err.code === 'TIMEOUT'
+  );
+}
+
+/** 延迟工具函数 */
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * 带超时的 Promise 包装。
+ * 超时后抛 Error('Provider call timeout')，但不会取消底层 fetch（Provider 接口不支持 signal）。
+ */
+async function callWithTimeout<T>(
+  fn: () => Promise<T>,
+  timeoutMs: number
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error('Provider call timeout')),
+      timeoutMs
+    );
+  });
+  try {
+    return await Promise.race([fn(), timeoutPromise]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/**
+ * 调用 Provider 方法，统一错误转换 + 超时 + 重试（指数退避）。
+ *
+ * 重试策略：
+ * - 仅对 PROVIDER_RATE_LIMIT / PROVIDER_UNAVAILABLE / TIMEOUT 错误重试
+ * - 最多重试 3 次，退避间隔 1s → 2s → 4s
+ * - 认证/校验/冲突等错误立即抛出
  */
 async function callProvider<T>(
   fn: () => Promise<{ success: boolean; data?: T; error?: any }>,
   providerType?: string
 ): Promise<T> {
-  let result: { success: boolean; data?: T; error?: any };
-  try {
-    result = await fn();
-  } catch (err) {
-    throw providerErrorToServiceError(err, providerType);
+  let lastError: DnsServiceError | undefined;
+
+  for (let attempt = 0; attempt <= PROVIDER_MAX_RETRIES; attempt++) {
+    try {
+      const result = await callWithTimeout(fn, PROVIDER_TIMEOUT_MS);
+
+      // Provider 返回成功且有数据
+      if (result.success && result.data !== undefined && result.data !== null) {
+        return result.data;
+      }
+
+      // Provider 返回失败
+      const serviceErr = providerErrorToServiceError(result.error ?? new Error('Provider returned empty data'), providerType);
+      if (!isRetryableError(serviceErr) || attempt === PROVIDER_MAX_RETRIES) {
+        throw serviceErr;
+      }
+      lastError = serviceErr;
+    } catch (err) {
+      const serviceErr = err instanceof DnsServiceError
+        ? err
+        : providerErrorToServiceError(err, providerType);
+      if (!isRetryableError(serviceErr) || attempt === PROVIDER_MAX_RETRIES) {
+        throw serviceErr;
+      }
+      lastError = serviceErr;
+    }
+
+    // 指数退避：1s, 2s, 4s
+    const delay = Math.pow(2, attempt) * 1000;
+    await sleep(delay);
   }
 
-  if (!result.success) {
-    throw providerErrorToServiceError(result.error, providerType);
-  }
-
-  if (result.data === undefined || result.data === null) {
-    throw providerErrorToServiceError(new Error('Provider returned empty data'), providerType);
-  }
-
-  return result.data;
+  throw lastError ?? new DnsServiceError({
+    code: 'INTERNAL_ERROR',
+    messageCn: 'Provider 调用失败（已耗尽重试次数）',
+    messageEn: 'Provider call failed (retries exhausted)',
+  });
 }
 
 // ============================================================
@@ -348,10 +430,14 @@ export async function createRecord(
   // 2. 加载 domain + provider
   const { provider, domain, providerEntity } = await createProviderInstanceForDomain(input.domainId);
 
+  // 2.1 归一化记录名称：FQDN → 相对名，@ 保持 @，空 → @
+  // 统一本地 DB 存储相对名，避免 Cloudflare 返回 FQDN 而用户输入 @ 导致查询不一致
+  const recordName = toRelativeRecordName(input.name, domain.name);
+
   // 3. 能力校验
   validateProxied(input.proxied, providerEntity, input.type);
 
-  // 4. 冲突检测（同名同类型）
+  // 4. 冲突检测（同名同类型，用归一化后的名称）
   const existing = await db
     .select({ id: dnsRecords.id })
     .from(dnsRecords)
@@ -359,7 +445,7 @@ export async function createRecord(
       and(
         eq(dnsRecords.domainId, input.domainId),
         eq(dnsRecords.type, input.type.toUpperCase()),
-        eq(dnsRecords.name, input.name),
+        eq(dnsRecords.name, recordName),
         eq(dnsRecords.isActive, true)
       )
     )
@@ -367,8 +453,8 @@ export async function createRecord(
 
   if (existing.length > 0) {
     throw new ConflictError(
-      `域名 ${domain.name} 下已存在 ${input.type} 记录 ${input.name}`,
-      `Record ${input.name} (${input.type}) already exists under ${domain.name}`,
+      `域名 ${domain.name} 下已存在 ${input.type} 记录 ${recordName}`,
+      `Record ${recordName} (${input.type}) already exists under ${domain.name}`,
       `existing record id: ${existing[0].id}`
     );
   }
@@ -377,7 +463,7 @@ export async function createRecord(
   const providerRecord = await callProvider(
     () => provider.addRecord(domain.name, {
       type: input.type as DNSRecordType,
-      name: input.name,
+      name: recordName,
       content: input.content,
       ttl: input.ttl ?? 600,
       priority: input.priority ?? undefined,
@@ -392,7 +478,7 @@ export async function createRecord(
     .values({
       domainId: input.domainId,
       type: input.type.toUpperCase(),
-      name: input.name,
+      name: recordName,
       content: input.content,
       ttl: input.ttl ?? 600,
       priority: input.priority ?? null,
@@ -462,9 +548,20 @@ export async function updateRecord(
 ): Promise<UpdateRecordResult> {
   const startedAt = now();
 
+  // 乐观锁：调用方传入读取时的 version；若提供且与当前不匹配则拒绝（TOCTOU 并发保护）
+  const expectedVersion = changes.expectedVersion;
+
   // 1. 加载已有记录
   const existingRow = await getRecordEntity(recordId);
   const before = toRecordSnapshot(existingRow);
+
+  if (expectedVersion !== undefined && expectedVersion !== before.version) {
+    throw new ConflictError(
+      `记录 ${recordId} 已被其他操作修改（期望版本 ${expectedVersion}，当前版本 ${before.version}），请刷新后重试`,
+      `Record ${recordId} was modified by another operation (expected version ${expectedVersion}, current ${before.version}), please refresh and retry`,
+      `expectedVersion=${expectedVersion}, currentVersion=${before.version}`
+    );
+  }
 
   // 2. 加载 domain + provider
   const { provider, domain, providerEntity } = await createProviderInstanceForDomain(before.domainId);
@@ -474,10 +571,13 @@ export async function updateRecord(
   validateRecordType(newType);
   validateProxied(changes.proxied, providerEntity, newType);
 
-  // 构建更新数据
+  // 构建更新数据（expectedVersion 不写入 DB，仅用于乐观锁校验）
   const updateData: Record<string, unknown> = {};
   if (changes.type !== undefined) updateData.type = changes.type.toUpperCase();
-  if (changes.name !== undefined) updateData.name = changes.name;
+  if (changes.name !== undefined) {
+    // 归一化 name：FQDN → 相对名
+    updateData.name = toRelativeRecordName(changes.name, domain.name);
+  }
   if (changes.content !== undefined) updateData.content = changes.content;
   if (changes.ttl !== undefined) updateData.ttl = changes.ttl;
   if (changes.priority !== undefined) updateData.priority = changes.priority;
@@ -494,7 +594,7 @@ export async function updateRecord(
   const providerRecord = await callProvider(
     () => provider.updateRecord(domain.name, before.providerRecordId!, {
       type: changes.type as DNSRecordType | undefined,
-      name: changes.name,
+      name: updateData.name as string | undefined,
       content: changes.content,
       ttl: changes.ttl,
       priority: changes.priority ?? undefined,
@@ -507,17 +607,33 @@ export async function updateRecord(
   if (providerRecord.proxiable !== undefined) updateData.proxiable = providerRecord.proxiable;
   if (providerRecord.proxied !== undefined) updateData.proxied = providerRecord.proxied;
 
-  // 5. 更新本地 DB
-  const [updated] = await db
+  // 5. 更新本地 DB（带乐观锁条件更新，原子性关闭 TOCTOU 窗口）
+  // WHERE 子句在 expectedVersion 提供时附加 version 校验；
+  // version 通过 SQL 自增，避免并发更新相互覆盖。
+  const updateWhere = expectedVersion !== undefined
+    ? and(eq(dnsRecords.id, recordId), eq(dnsRecords.version, expectedVersion))
+    : eq(dnsRecords.id, recordId);
+
+  const updatedRows = await db
     .update(dnsRecords)
     .set({
       ...updateData,
+      version: sql`${dnsRecords.version} + 1`,
       updatedAt: now(),
     })
-    .where(eq(dnsRecords.id, recordId))
+    .where(updateWhere)
     .returning();
 
-  const after = toRecordSnapshot(updated);
+  // 乐观锁冲突：expectedVersion 提供但 0 行更新，说明读取后被并发修改
+  if (updatedRows.length === 0) {
+    throw new ConflictError(
+      `记录 ${recordId} 更新失败：已被其他操作修改（期望版本 ${expectedVersion}），请刷新后重试`,
+      `Record ${recordId} update failed: modified by another operation (expected version ${expectedVersion}), please refresh and retry`,
+      `expectedVersion=${expectedVersion}`
+    );
+  }
+
+  const after = toRecordSnapshot(updatedRows[0]);
   const completedAt = now();
 
   // 6. 审计日志
@@ -570,16 +686,29 @@ export async function updateRecord(
  * 3. 调用 Provider API
  * 4. 删除本地 DB 记录
  * 5. 写入审计日志（before）
+ *
+ * @param options.expectedVersion 乐观锁版本号；提供时与当前 version 不匹配则拒绝删除（TOCTOU 并发保护）
  */
 export async function deleteRecord(
   recordId: number,
-  context: AuditContext
+  context: AuditContext,
+  options: { expectedVersion?: number } = {}
 ): Promise<DeleteRecordResult> {
   const startedAt = now();
+  const expectedVersion = options.expectedVersion;
 
   // 1. 加载已有记录
   const existingRow = await getRecordEntity(recordId);
   const before = toRecordSnapshot(existingRow);
+
+  // 乐观锁校验
+  if (expectedVersion !== undefined && expectedVersion !== before.version) {
+    throw new ConflictError(
+      `记录 ${recordId} 已被其他操作修改（期望版本 ${expectedVersion}，当前版本 ${before.version}），请刷新后重试`,
+      `Record ${recordId} was modified by another operation (expected version ${expectedVersion}, current ${before.version}), please refresh and retry`,
+      `expectedVersion=${expectedVersion}, currentVersion=${before.version}`
+    );
+  }
 
   // 2. 加载 domain + provider
   const { provider, domain, providerEntity } = await createProviderInstanceForDomain(before.domainId);
@@ -597,8 +726,20 @@ export async function deleteRecord(
     providerEntity.type
   );
 
-  // 4. 删除本地 DB 记录
-  await db.delete(dnsRecords).where(eq(dnsRecords.id, recordId));
+  // 4. 删除本地 DB 记录（带乐观锁条件，原子性关闭 TOCTOU 窗口）
+  const deleteWhere = expectedVersion !== undefined
+    ? and(eq(dnsRecords.id, recordId), eq(dnsRecords.version, expectedVersion))
+    : eq(dnsRecords.id, recordId);
+  const deletedRows = await db.delete(dnsRecords).where(deleteWhere).returning({ id: dnsRecords.id });
+
+  // 乐观锁冲突：expectedVersion 提供但 0 行删除
+  if (deletedRows.length === 0) {
+    throw new ConflictError(
+      `记录 ${recordId} 删除失败：已被其他操作修改（期望版本 ${expectedVersion}），请刷新后重试`,
+      `Record ${recordId} delete failed: modified by another operation (expected version ${expectedVersion}), please refresh and retry`,
+      `expectedVersion=${expectedVersion}`
+    );
+  }
 
   const completedAt = now();
 
@@ -691,7 +832,7 @@ export async function setProxy(
     providerEntity.type
   );
 
-  // 5. 更新本地 DB
+  // 5. 更新本地 DB（version 自增，保持乐观锁语义一致）
   const updateData: Record<string, unknown> = {
     proxied: providerRecord.proxied ?? proxied,
   };
@@ -701,6 +842,7 @@ export async function setProxy(
     .update(dnsRecords)
     .set({
       ...updateData,
+      version: sql`${dnsRecords.version} + 1`,
       updatedAt: now(),
     })
     .where(eq(dnsRecords.id, recordId))
@@ -881,12 +1023,16 @@ export async function syncRecords(
   let updated = 0;
 
   for (const remote of remoteRecords) {
+    // 归一化远端记录名称为相对名（@ 或子域名）
+    // Cloudflare 返回 FQDN，其他 provider 多返回相对名，统一为相对名便于本地匹配
+    const normalizedName = toRelativeRecordName(remote.name, domain.name);
+
     // 按 providerRecordId 优先匹配，兜底用 (type, name, content)
     let local = localRows.find(r => r.providerRecordId === remote.id);
     if (!local) {
       local = localRows.find(r =>
         r.type === remote.type &&
-        r.name === remote.name &&
+        r.name === normalizedName &&
         r.content === remote.content
       );
     }
@@ -897,7 +1043,7 @@ export async function syncRecords(
         .update(dnsRecords)
         .set({
           type: remote.type,
-          name: remote.name,
+          name: normalizedName,
           content: remote.content,
           ttl: remote.ttl ?? local.ttl,
           priority: remote.priority ?? null,
@@ -914,7 +1060,7 @@ export async function syncRecords(
       await db.insert(dnsRecords).values({
         domainId,
         type: remote.type,
-        name: remote.name,
+        name: normalizedName,
         content: remote.content,
         ttl: remote.ttl ?? 600,
         priority: remote.priority ?? null,

@@ -398,6 +398,8 @@ export async function rollbackOperation(
             proxiable: plan.beforeSnapshot.proxiable === true || plan.beforeSnapshot.proxiable === false
               ? (plan.beforeSnapshot.proxiable as boolean)
               : null,
+            // 回退补偿视为一次新的修改，version 自增以维持乐观锁一致性
+            version: sql`${dnsRecords.version} + 1`,
             updatedAt: new Date().toISOString(),
           })
           .where(eq(dnsRecords.id, op.recordId));

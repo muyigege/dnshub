@@ -125,6 +125,8 @@ export const dnsRecords = sqliteTable("dns_records", {
   proxied: integer("proxied", { mode: 'boolean' }),
   // 该记录是否支持被代理（只读能力，由 Provider 返回）
   proxiable: integer("proxiable", { mode: 'boolean' }),
+  // 乐观锁版本号：每次更新自增。调用方可传 expectedVersion 做 TOCTOU 并发保护
+  version: integer("version").default(0).notNull(),
 });
 
 // 导出类型
